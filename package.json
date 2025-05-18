@@ -1,0 +1,14 @@
+{
+  "name": "maze-game-server",
+  "version": "1.0.0",
+  "description": "WebSocket server for 3D Maze Game",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^5.1.0",
+    "uuid": "^9.0.0",
+    "ws": "^8.13.0"
+  }
+}

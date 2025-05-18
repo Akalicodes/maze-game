@@ -1,0 +1,1113 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>3D Maze Game</title>
+    <!-- Load Three.js from local file -->
+    <script src="js/three.min.js"></script>
+    <script src="js/maze-generator.js"></script>
+    <script src="js/multiplayer.js"></script>
+    <script>
+        // Verify Three.js loaded
+        window.addEventListener('load', function() {
+            if (typeof THREE === 'undefined') {
+                document.body.innerHTML = '<div style="color: red; text-align: center; margin-top: 50px;">Error: Failed to load 3D library. Please try refreshing the page.</div>';
+            }
+        });
+    </script>
+    <style>
+        body { 
+            margin: 0;
+            overflow: hidden;
+            font-family: Arial, sans-serif;
+            cursor: none;
+        }
+        #startScreen {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            background: none;
+            color: white;
+            padding: 30px;
+            z-index: 1000;
+        }
+        #startScreen h1 {
+            color: #4CAF50;
+            text-shadow: 0 0 15px rgba(76, 175, 80, 0.7);
+            margin-bottom: 30px;
+            font-size: 48px;
+        }
+        #startScreen .instruction {
+            color: rgba(255, 255, 255, 0.9);
+            margin: 8px 0;
+            font-size: 18px;
+            text-shadow: 0 0 10px rgba(255, 255, 255, 0.5);
+        }
+        .gameButton {
+            background: rgba(76, 175, 80, 0.8);
+            border: 2px solid rgba(255, 255, 255, 0.2);
+            color: white;
+            padding: 15px 30px;
+            font-size: 20px;
+            cursor: pointer;
+            border-radius: 25px;
+            transition: all 0.3s;
+            margin: 15px;
+            width: 200px;
+            backdrop-filter: blur(5px);
+            text-shadow: 0 0 5px rgba(0, 0, 0, 0.3);
+        }
+        .gameButton:hover {
+            background: rgba(76, 175, 80, 1);
+            transform: scale(1.05);
+            box-shadow: 0 0 20px rgba(76, 175, 80, 0.4);
+        }
+        #multiplayerMenu {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            background: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 30px;
+            border-radius: 15px;
+            z-index: 1000;
+            display: none;
+            box-shadow: 0 0 20px rgba(0, 0, 0, 0.5);
+        }
+        #roomCodeInput {
+            padding: 10px;
+            font-size: 18px;
+            margin: 10px;
+            border-radius: 5px;
+            border: none;
+            text-align: center;
+            width: 180px;
+        }
+        .backButton {
+            background: #666;
+            border: none;
+            color: white;
+            padding: 10px 20px;
+            font-size: 16px;
+            cursor: pointer;
+            border-radius: 5px;
+            transition: all 0.3s;
+            margin-top: 20px;
+        }
+        .backButton:hover {
+            background: #555;
+        }
+        #roomCode {
+            font-size: 48px;
+            margin: 20px;
+            padding: 30px;
+            background: rgba(0, 0, 0, 0.9);
+            border-radius: 15px;
+            font-family: monospace;
+            letter-spacing: 8px;
+            text-align: center;
+            border: 3px solid #4CAF50;
+            color: #4CAF50;
+            cursor: pointer;
+            user-select: all;
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 9999;
+            box-shadow: 0 0 30px rgba(76, 175, 80, 0.5);
+            transition: all 0.3s ease;
+            animation: pulse 2s infinite;
+            display: none;
+        }
+        @keyframes pulse {
+            0% { box-shadow: 0 0 30px rgba(76, 175, 80, 0.5); }
+            50% { box-shadow: 0 0 50px rgba(76, 175, 80, 0.8); }
+            100% { box-shadow: 0 0 30px rgba(76, 175, 80, 0.5); }
+        }
+        #roomCodeInstructions {
+            color: #fff;
+            font-size: 18px;
+            margin-top: 20px;
+            text-align: center;
+            position: fixed;
+            top: calc(50% + 100px);
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 1000;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 15px 30px;
+            border-radius: 10px;
+            animation: fadeIn 0.5s ease-out;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translate(-50%, 20px); }
+            to { opacity: 1; transform: translate(-50%, 0); }
+        }
+        #loadingScreen {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            background: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 20px;
+            border-radius: 10px;
+            z-index: 2000;
+            display: none;
+        }
+        #loadingMessage {
+            margin-top: 10px;
+            font-size: 18px;
+        }
+        #errorScreen {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            background: rgba(255, 0, 0, 0.9);
+            color: white;
+            padding: 30px;
+            border-radius: 15px;
+            z-index: 3000;
+            display: none;
+            max-width: 80%;
+            box-shadow: 0 0 20px rgba(0, 0, 0, 0.5);
+        }
+        #errorMessage {
+            margin: 20px 0;
+            font-size: 16px;
+            white-space: pre-wrap;
+            text-align: left;
+        }
+        #debugInfo {
+            margin-top: 20px;
+            font-size: 14px;
+            color: #ddd;
+            text-align: left;
+            font-family: monospace;
+            background: rgba(0, 0, 0, 0.3);
+            padding: 10px;
+            border-radius: 5px;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+        .spinner {
+            border: 4px solid rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            border-top: 4px solid white;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 10px auto;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        #winScreen {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0, 0, 0, 0.9);
+            color: white;
+            padding: 30px;
+            border-radius: 15px;
+            text-align: center;
+            z-index: 2000;
+            display: none;
+            animation: popIn 0.5s ease-out;
+        }
+        @keyframes popIn {
+            0% { transform: translate(-50%, -50%) scale(0.5); opacity: 0; }
+            100% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+        }
+        #winScreen h2 {
+            color: #4CAF50;
+            margin-bottom: 20px;
+            font-size: 32px;
+            text-shadow: 0 0 10px rgba(76, 175, 80, 0.5);
+        }
+        #winScreen p {
+            font-size: 20px;
+            margin: 15px 0;
+            color: #fff;
+        }
+        #winScreen button {
+            background: #4CAF50;
+            border: none;
+            color: white;
+            padding: 15px 30px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 10px;
+            font-size: 20px;
+            transition: all 0.3s;
+        }
+        #winScreen button:hover {
+            background: #45a049;
+            transform: scale(1.1);
+        }
+        /* Remove crosshair cursor */
+        canvas {
+            cursor: none;
+        }
+        
+        /* Update win screen styles */
+        #winScreen button {
+            background: #4CAF50;
+            border: none;
+            color: white;
+            padding: 15px 30px;
+            font-size: 24px;
+            cursor: pointer;
+            border-radius: 8px;
+            transition: all 0.3s;
+            margin-top: 20px;
+        }
+        
+        #winScreen button:hover {
+            background: #45a049;
+            transform: scale(1.1);
+        }
+        canvas {
+            cursor: none !important;
+            outline: none;
+        }
+        * {
+            cursor: auto;
+        }
+        #gameContainer {
+            position: relative;
+            width: 100%;
+            height: 100%;
+        }
+        .no-cursor {
+            cursor: none !important;
+        }
+        .game-canvas {
+            outline: none;
+            -webkit-touch-callout: none;
+            -webkit-user-select: none;
+            -khtml-user-select: none;
+            -moz-user-select: none;
+            -ms-user-select: none;
+            user-select: none;
+            -webkit-tap-highlight-color: transparent;
+        }
+    </style>
+</head>
+<body class="no-cursor">
+    <div id="startScreen">
+        <h1>3D Maze Game</h1>
+        <div class="instruction">W/S or ↑/↓ = Move Forward/Back</div>
+        <div class="instruction">A/D or ←/→ = Turn Left/Right</div>
+        <button class="gameButton" id="singlePlayerButton">Single Player</button>
+        <button class="gameButton" id="multiplayerButton">Multiplayer</button>
+    </div>
+
+    <div id="roomCode" class="room-code"></div>
+    <div id="roomCodeInstructions" class="room-code-instructions"></div>
+
+    <div id="multiplayerMenu">
+        <h2>Multiplayer Mode</h2>
+        <button class="gameButton" id="createRoomButton">Create Room</button>
+        <button class="gameButton" id="joinRoomButton">Join Room</button>
+        <input type="text" id="roomCodeInput" placeholder="Enter Room Code" style="display: none;">
+        <button class="backButton" id="backToMainButton">Back to Main Menu</button>
+    </div>
+
+    <div id="loadingScreen">
+        <div class="spinner"></div>
+        <div id="loadingMessage">Loading Game...</div>
+    </div>
+
+    <div id="errorScreen">
+        <h2>Error</h2>
+        <div id="errorMessage"></div>
+        <div id="debugInfo"></div>
+        <button onclick="location.reload()" style="margin-top: 15px; padding: 10px 20px; cursor: pointer; background: white; color: red; border: none; border-radius: 5px; font-weight: bold;">Reload Game</button>
+    </div>
+
+    <div id="winScreen">
+        <h2>🎉 You Won! 🎉</h2>
+        <p>Congratulations! You made it through the maze!</p>
+        <button onclick="startGame('single')">Play Again</button>
+    </div>
+
+    <script>
+        let scene, camera, renderer, controls;
+        let maze, mazeGroup;
+        const MAZE_SIZE = { width: 25, height: 25 };
+        let keydownListener, keyupListener;
+        let textureLoader;
+        let gameMode = 'single'; // 'single' or 'multiplayer'
+        let multiplayerManager = null;
+        let otherPlayer = null;
+        let gameStarted = false;
+
+        function createRoom() {
+            if (gameStarted) {
+                console.log('Game already started, ignoring createRoom');
+                return;
+            }
+            
+            showLoadingScreen('Creating Room...');
+            console.log('Creating room...');
+            
+            // Initialize multiplayer manager
+            multiplayerManager = new MultiplayerManager();
+            
+            // Set up callbacks
+            multiplayerManager.onConnectionSuccess = () => {
+                console.log('Successfully connected, creating room...');
+                multiplayerManager.createRoom();
+            };
+
+            multiplayerManager.onRoomCreated = (roomCode) => {
+                console.log('Room created with code:', roomCode);
+                hideLoadingScreen();
+                
+                // Hide all menus
+                document.getElementById('multiplayerMenu').style.display = 'none';
+                document.getElementById('startScreen').style.display = 'none';
+                
+                // Show the room code prominently
+                const roomCodeElement = document.getElementById('roomCode');
+                roomCodeElement.style.display = 'block';  // Explicitly show the element
+                roomCodeElement.textContent = roomCode;
+                
+                // Show instructions
+                const instructionsElement = document.getElementById('roomCodeInstructions');
+                instructionsElement.textContent = 'Share this code with your friend • Click to copy';
+                instructionsElement.style.display = 'block';
+                
+                // Set the game mode and initialize
+                gameMode = 'multiplayer';
+                init();
+
+                // Log the room code element's visibility state
+                console.log('Room code element:', {
+                    display: roomCodeElement.style.display,
+                    visibility: window.getComputedStyle(roomCodeElement).visibility,
+                    zIndex: window.getComputedStyle(roomCodeElement).zIndex,
+                    content: roomCodeElement.textContent
+                });
+            };
+
+            multiplayerManager.onPlayerJoined = (playerId) => {
+                console.log('Player joined:', playerId);
+                // Hide the room code and instructions
+                document.getElementById('roomCode').style.display = 'none';
+                document.getElementById('roomCodeInstructions').style.display = 'none';
+                
+                // Start the multiplayer game
+                startMultiplayerGame();
+            };
+
+            multiplayerManager.onError = (error) => {
+                console.error('Error in multiplayer:', error);
+                hideLoadingScreen();
+                alert(error);
+                showMultiplayerMenu();
+            };
+
+            // Start connection
+            multiplayerManager.connect();
+        }
+
+        function startMultiplayerGame() {
+            if (!gameStarted) {
+                console.log('Starting multiplayer game...');
+                gameStarted = true;
+                
+                // Hide all menus
+                document.getElementById('startScreen').style.display = 'none';
+                document.getElementById('multiplayerMenu').style.display = 'none';
+                document.getElementById('winScreen').style.display = 'none';
+                
+                // Set up multiplayer components
+                setupMultiplayer();
+                
+                // Start the animation loop
+                animate();
+            }
+        }
+
+        function init() {
+            console.log('Initializing game in mode:', gameMode);
+            
+            try {
+                // Initialize scene
+                scene = new THREE.Scene();
+                scene.background = new THREE.Color(0x000000);
+                
+                // Initialize renderer with antialiasing
+                renderer = new THREE.WebGLRenderer({ 
+                    antialias: true,
+                    powerPreference: "high-performance"
+                });
+                renderer.setSize(window.innerWidth, window.innerHeight);
+                renderer.setPixelRatio(window.devicePixelRatio);
+                document.body.appendChild(renderer.domElement);
+                
+                // Initialize camera
+                camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+                
+                // Initialize texture loader
+                textureLoader = new THREE.TextureLoader();
+                
+                // Generate maze using MazeGenerator
+                const generator = new MazeGenerator(MAZE_SIZE.width, MAZE_SIZE.height);
+                maze = generator.generate();
+                
+                // Set camera position after maze is generated
+                camera.position.set(
+                    maze.startPosition.x,
+                    1.5, // Eye level height
+                    maze.startPosition.z
+                );
+                
+                // Create maze geometry
+                mazeGroup = new THREE.Group();
+                generateNewMaze();
+                
+                // Set up controls
+                controls = setupControls();
+                
+                // Start animation loop
+                animate();
+                
+                console.log('Game initialized in mode:', gameMode);
+            } catch (error) {
+                console.error('Error initializing game:', error);
+                document.body.innerHTML = '<div style="color: red; text-align: center; margin-top: 50px;">Error: Failed to initialize game. Please try refreshing the page.</div>';
+            }
+        }
+
+        function generateNewMaze() {
+            if (mazeGroup) {
+                // Remove all objects from the scene
+                while(scene.children.length > 0){ 
+                    scene.remove(scene.children[0]); 
+                }
+                mazeGroup = new THREE.Group();
+            }
+
+            // Only generate new maze if we're the host or in single player
+            if (gameMode === 'single' || (multiplayerManager && multiplayerManager.isHost)) {
+                const generator = new MazeGenerator(MAZE_SIZE.width, MAZE_SIZE.height);
+                maze = generator.generate();
+                
+                // If we're the host, send the maze data to the other player
+                if (multiplayerManager && multiplayerManager.isHost) {
+                    multiplayerManager.socket.send(JSON.stringify({
+                        type: 'maze_data',
+                        maze: maze
+                    }));
+                }
+            }
+            
+            mazeGroup = new THREE.Group();
+            
+            // Add static lights in a sparser grid pattern
+            const mazeWidth = MAZE_SIZE.width * maze.cellSize;
+            const mazeHeight = MAZE_SIZE.height * maze.cellSize;
+            
+            // Calculate positions for a few strategic lights
+            const lights = [
+                // Center light
+                {x: 0, z: 0, intensity: 8.0, distance: 70},
+                
+                // Four quadrant lights
+                {x: -mazeWidth/4, z: -mazeHeight/4, intensity: 6.0, distance: 50},
+                {x: mazeWidth/4, z: -mazeHeight/4, intensity: 6.0, distance: 50},
+                {x: -mazeWidth/4, z: mazeHeight/4, intensity: 6.0, distance: 50},
+                {x: mazeWidth/4, z: mazeHeight/4, intensity: 6.0, distance: 50},
+                
+                // Additional corner lights
+                {x: -mazeWidth/2, z: -mazeHeight/2, intensity: 5.0, distance: 40},
+                {x: mazeWidth/2, z: -mazeHeight/2, intensity: 5.0, distance: 40},
+                {x: -mazeWidth/2, z: mazeHeight/2, intensity: 5.0, distance: 40},
+                {x: mazeWidth/2, z: mazeHeight/2, intensity: 5.0, distance: 40}
+            ];
+            
+            // Add brighter ambient light for better overall visibility
+            const ambientLight = new THREE.AmbientLight(0xffffff, 3.0);
+            scene.add(ambientLight);
+            
+            // Add all lights
+            lights.forEach(light => {
+                const pointLight = new THREE.PointLight(0xffffff, light.intensity, light.distance);
+                pointLight.position.set(light.x, 3.5, light.z);
+                scene.add(pointLight);
+            });
+
+            // Load textures
+            const wallTexture = textureLoader.load('wall.jpg');
+            wallTexture.wrapS = wallTexture.wrapT = THREE.RepeatWrapping;
+            wallTexture.repeat.set(1, 1);
+
+            // Create wall geometry and material only once for better performance
+            const wallGeometry = new THREE.BoxGeometry(maze.cellSize, maze.wallHeight, maze.cellSize);
+            const wallMaterial = new THREE.MeshPhongMaterial({
+                map: wallTexture,
+                color: 0xcccccc,  // Lighter wall color
+                specular: 0x222222,
+                shininess: 10,
+                transparent: false,
+                opacity: 1.0,
+                side: THREE.FrontSide,
+                depthWrite: true,
+                depthTest: true
+            });
+
+            maze.wallPositions = [];
+
+            function addWall(x, z) {
+                const wall = new THREE.Mesh(wallGeometry, wallMaterial);
+                wall.position.set(x * maze.cellSize, maze.wallHeight / 2, z * maze.cellSize);
+                wall.castShadow = true;
+                wall.receiveShadow = true;
+                wall.matrixAutoUpdate = false; // Optimize performance
+                wall.updateMatrix();
+                mazeGroup.add(wall);
+                
+                maze.wallPositions.push({ x: x * maze.cellSize, z: z * maze.cellSize });
+            }
+
+            // Clear existing walls
+            while(mazeGroup.children.length > 0) {
+                const obj = mazeGroup.children[0];
+                obj.geometry.dispose();
+                obj.material.dispose();
+                mazeGroup.remove(obj);
+            }
+
+            // Add maze walls
+            for (let y = 0; y < MAZE_SIZE.height; y++) {
+                for (let x = 0; x < MAZE_SIZE.width; x++) {
+                    if (maze.maze[y][x] === 1) {
+                        addWall(x, y);
+                    }
+                }
+            }
+
+            // Add boundary walls
+            for (let x = -1; x <= MAZE_SIZE.width; x++) {
+                addWall(x, -1);
+                addWall(x, MAZE_SIZE.height);
+            }
+
+            for (let z = -1; z <= MAZE_SIZE.height; z++) {
+                addWall(-1, z);
+                addWall(MAZE_SIZE.width, z);
+            }
+
+            // Add floor
+            const floorGeometry = new THREE.PlaneGeometry(
+                (MAZE_SIZE.width + 2) * maze.cellSize,
+                (MAZE_SIZE.height + 2) * maze.cellSize
+            );
+            const floorMaterial = new THREE.MeshPhongMaterial({
+                color: 0x808080,  // Lighter floor color
+                specular: 0x222222,
+                shininess: 10,
+                side: THREE.FrontSide,
+                depthWrite: true
+            });
+            const floor = new THREE.Mesh(floorGeometry, floorMaterial);
+            floor.rotation.x = -Math.PI / 2;
+            floor.position.set(
+                (MAZE_SIZE.width * maze.cellSize) / 2,
+                0,
+                (MAZE_SIZE.height * maze.cellSize) / 2
+            );
+            mazeGroup.add(floor);
+
+            // Add end marker with improved material
+            const endMarkerGeometry = new THREE.CylinderGeometry(0.4, 0.4, 0.1, 32);
+            const endMarkerMaterial = new THREE.MeshPhongMaterial({ 
+                color: 0x00ff00,
+                emissive: 0x00ff00,
+                emissiveIntensity: 0.5,
+                transparent: false,
+                opacity: 1.0,
+                depthWrite: true
+            });
+            const endMarker = new THREE.Mesh(endMarkerGeometry, endMarkerMaterial);
+            
+            endMarker.position.set(
+                maze.endPosition.x * maze.cellSize,
+                0.05,
+                maze.endPosition.z * maze.cellSize
+            );
+            
+            // Add point light to end marker for glow
+            const endLight = new THREE.PointLight(0x00ff00, 1, 5);
+            endLight.position.copy(endMarker.position);
+            endLight.position.y = 1;
+            
+            mazeGroup.add(endMarker);
+            mazeGroup.add(endLight);
+
+            // Add the entire maze group to the scene
+            scene.add(mazeGroup);
+        }
+
+        function checkCollision(position) {
+            const playerRadius = 0.4;
+            const wallBuffer = 0.5; // Increased buffer for better wall stopping
+            const minDistance = playerRadius + maze.cellSize / 2 + wallBuffer;
+            let nearestWall = null;
+            let nearestDistance = Infinity;
+            
+            // Find the nearest wall
+            for (const wall of maze.wallPositions) {
+                const dx = position.x - wall.x;
+                const dz = position.z - wall.z;
+                const distance = Math.sqrt(dx * dx + dz * dz);
+                
+                if (distance < minDistance && distance < nearestDistance) {
+                    nearestWall = wall;
+                    nearestDistance = distance;
+                }
+            }
+            
+            if (nearestWall) {
+                // Calculate wall normal
+                const dx = position.x - nearestWall.x;
+                const dz = position.z - nearestWall.z;
+                const distance = Math.sqrt(dx * dx + dz * dz);
+                const wallNormal = new THREE.Vector2(dx / distance, dz / distance);
+                
+                // Calculate push back position with extra safety margin
+                const pushDistance = (minDistance - distance) * 1.1; // Add 10% extra push
+                const slidePosition = {
+                    x: position.x + wallNormal.x * pushDistance,
+                    y: 1.5,
+                    z: position.z + wallNormal.y * pushDistance
+                };
+                
+                return {
+                    collision: true,
+                    slidePosition: slidePosition,
+                    wallNormal: wallNormal,
+                    distance: distance
+                };
+            }
+            
+            return { collision: false };
+        }
+
+        function setupControls() {
+            const moveSpeed = 0.15;
+            const turnSpeed = 0.06;
+            let lastTime = performance.now();
+            let lastPosition = new THREE.Vector3();
+            
+            const keys = {
+                forward: false,
+                backward: false,
+                left: false,
+                right: false
+            };
+
+            keydownListener = (e) => {
+                switch(e.key.toLowerCase()) {
+                    case 'w':
+                    case 'arrowup':
+                        keys.forward = true;
+                        break;
+                    case 's':
+                    case 'arrowdown':
+                        keys.backward = true;
+                        break;
+                    case 'a':
+                    case 'arrowleft':
+                        keys.left = true;
+                        break;
+                    case 'd':
+                    case 'arrowright':
+                        keys.right = true;
+                        break;
+                }
+            };
+
+            keyupListener = (e) => {
+                switch(e.key.toLowerCase()) {
+                    case 'w':
+                    case 'arrowup':
+                        keys.forward = false;
+                        break;
+                    case 's':
+                    case 'arrowdown':
+                        keys.backward = false;
+                        break;
+                    case 'a':
+                    case 'arrowleft':
+                        keys.left = false;
+                        break;
+                    case 'd':
+                    case 'arrowright':
+                        keys.right = false;
+                        break;
+                }
+            };
+
+            // Remove any existing listeners
+            if (keydownListener) document.removeEventListener('keydown', keydownListener);
+            if (keyupListener) document.removeEventListener('keyup', keyupListener);
+
+            document.addEventListener('keydown', keydownListener);
+            document.addEventListener('keyup', keyupListener);
+
+            return function updateControls() {
+                const currentTime = performance.now();
+                const deltaTime = Math.min((currentTime - lastTime) / 16.67, 2.0);
+                lastTime = currentTime;
+
+                // Store current position
+                lastPosition.copy(camera.position);
+
+                // Apply rotation
+                if (keys.left) camera.rotation.y += turnSpeed * deltaTime;
+                if (keys.right) camera.rotation.y -= turnSpeed * deltaTime;
+
+                // Calculate movement
+                if (keys.forward || keys.backward) {
+                    const direction = new THREE.Vector3();
+                    camera.getWorldDirection(direction);
+                    direction.y = 0; // Keep movement horizontal
+                    direction.normalize();
+                    
+                    if (keys.backward) {
+                        direction.multiplyScalar(-1);
+                    }
+                    
+                    // Test position before moving
+                    const moveAmount = moveSpeed * deltaTime;
+                    const testPosition = camera.position.clone().add(direction.multiplyScalar(moveAmount));
+                    
+                    // Check collision at test position
+                    const collisionResult = checkCollision(testPosition);
+                    
+                    if (!collisionResult.collision) {
+                        // No collision, safe to move
+                        camera.position.copy(testPosition);
+                    } else {
+                        // We hit a wall - first try to slide
+                        const wallNormal = collisionResult.wallNormal;
+                        
+                        // Project movement direction onto wall plane
+                        const dot = direction.x * wallNormal.x + direction.z * wallNormal.y;
+                        const slideDirection = new THREE.Vector2(
+                            direction.x - wallNormal.x * dot,
+                            direction.z - wallNormal.y * dot
+                        ).normalize();
+                        
+                        // Only try to slide if we're not hitting the wall head-on
+                        if (Math.abs(dot) < 0.95) {
+                            const slidePosition = new THREE.Vector3(
+                                collisionResult.slidePosition.x + slideDirection.x * moveAmount * 0.5,
+                                1.5,
+                                collisionResult.slidePosition.z + slideDirection.y * moveAmount * 0.5
+                            );
+                            
+                            // Verify slide position is safe
+                            const slideCollision = checkCollision(slidePosition);
+                            if (!slideCollision.collision) {
+                                camera.position.copy(slidePosition);
+                            } else {
+                                // Can't slide, stay at safe push-back position
+                                camera.position.copy(collisionResult.slidePosition);
+                            }
+                        } else {
+                            // Head-on collision, just stop at the push-back position
+                            camera.position.copy(collisionResult.slidePosition);
+                        }
+                    }
+                }
+                
+                // Final safety check - if somehow we're in a wall, push out
+                const finalCollision = checkCollision(camera.position);
+                if (finalCollision.collision) {
+                    camera.position.copy(finalCollision.slidePosition);
+                }
+                
+                // Maintain camera height
+                camera.position.y = 1.5;
+                
+                // Check if reached end
+                const distanceToEnd = new THREE.Vector2(
+                    camera.position.x - maze.endPosition.x * maze.cellSize,
+                    camera.position.z - maze.endPosition.z * maze.cellSize
+                ).length();
+                
+                if (distanceToEnd < 1) {
+                    showWinScreen();
+                }
+            };
+        }
+
+        function showWinScreen() {
+            document.getElementById('winScreen').style.display = 'block';
+            // Reset game state
+            gameStarted = false;
+        }
+
+        // Show the multiplayer menu
+        function showMultiplayerMenu() {
+            console.log('Showing multiplayer menu');
+            gameStarted = false;
+            gameMode = 'single'; // Reset game mode
+            document.getElementById('startScreen').style.display = 'none';
+            document.getElementById('multiplayerMenu').style.display = 'block';
+            document.getElementById('roomCode').style.display = 'none';
+            document.getElementById('roomCodeInstructions').style.display = 'none';
+            document.getElementById('roomCodeInput').style.display = 'none';
+            document.getElementById('createRoomButton').style.display = 'block';
+            document.getElementById('joinRoomButton').style.display = 'block';
+        }
+
+        // Show join room input
+        function showJoinRoom() {
+            document.getElementById('createRoomButton').style.display = 'none';
+            document.getElementById('joinRoomButton').style.display = 'none';
+            document.getElementById('roomCodeInput').style.display = 'block';
+            document.getElementById('roomCodeInput').value = '';
+        }
+
+        function joinRoom() {
+            const roomCode = document.getElementById('roomCodeInput').value.trim().toUpperCase();
+            if (!roomCode) {
+                alert('Please enter a room code');
+                return;
+            }
+
+            showLoadingScreen('Joining Room...');
+            console.log('Attempting to join room:', roomCode);
+            
+            // Initialize multiplayer manager
+            multiplayerManager = new MultiplayerManager();
+            
+            // Set up callbacks
+            multiplayerManager.onConnectionSuccess = () => {
+                console.log('Successfully connected to server, attempting to join room:', roomCode);
+                multiplayerManager.joinRoom(roomCode);
+            };
+
+            multiplayerManager.onRoomJoined = (playerId) => {
+                console.log('Successfully joined room:', roomCode, 'as player:', playerId);
+                hideLoadingScreen();
+                
+                // Hide all menus
+                document.getElementById('startScreen').style.display = 'none';
+                document.getElementById('multiplayerMenu').style.display = 'none';
+                document.getElementById('roomCodeInput').style.display = 'none';
+                
+                // Set the game mode and initialize the game first
+                gameMode = 'multiplayer';
+                init();  // Initialize the game first
+                
+                // Then start multiplayer components
+                startMultiplayerGame();
+            };
+
+            multiplayerManager.onError = (error) => {
+                console.error('Error joining room:', error);
+                hideLoadingScreen();
+                alert('Error joining room: ' + error);
+                showMultiplayerMenu();
+            };
+
+            // Start connection
+            multiplayerManager.connect();
+        }
+
+        function showLoadingScreen(message = 'Loading Game...') {
+            document.getElementById('loadingMessage').textContent = message;
+            document.getElementById('loadingScreen').style.display = 'block';
+        }
+
+        function hideLoadingScreen() {
+            document.getElementById('loadingScreen').style.display = 'none';
+        }
+
+        function setupMultiplayer() {
+            console.log('Setting up multiplayer components...');
+            
+            // Create other player representation
+            const otherPlayerGeometry = new THREE.CylinderGeometry(0.3, 0.3, 2, 8);
+            const otherPlayerMaterial = new THREE.MeshPhongMaterial({ color: 0xff0000 });
+            otherPlayer = new THREE.Mesh(otherPlayerGeometry, otherPlayerMaterial);
+            otherPlayer.position.set(0, 1, 0);
+            otherPlayer.visible = false; // Hide initially
+            scene.add(otherPlayer);
+
+            console.log('Other player mesh added to scene');
+
+            // Set up multiplayer event handlers
+            multiplayerManager.onPlayerJoined = (playerId) => {
+                console.log('Player joined:', playerId);
+                if (otherPlayer) {
+                    otherPlayer.visible = true;
+                }
+            };
+
+            multiplayerManager.onPlayerLeft = (playerId) => {
+                console.log('Player left:', playerId);
+                if (otherPlayer) {
+                    otherPlayer.visible = false;
+                }
+            };
+
+            multiplayerManager.onPlayerMove = (playerId, position, rotation) => {
+                console.log('Received player move:', playerId, position, rotation);
+                if (otherPlayer) {
+                    otherPlayer.visible = true;
+                    otherPlayer.position.set(position.x, position.y, position.z);
+                    otherPlayer.rotation.set(rotation.x, rotation.y, rotation.z);
+                }
+            };
+        }
+
+        function copyRoomCode(element) {
+            const code = element.textContent;
+            navigator.clipboard.writeText(code).then(() => {
+                element.classList.add('copied');
+                setTimeout(() => element.classList.remove('copied'), 500);
+            });
+        }
+
+        function startGame(mode = 'single') {
+            if (mode === 'multiplayer') {
+                console.log('Redirecting multiplayer start to startMultiplayerGame');
+                startMultiplayerGame();
+                return;
+            }
+            
+            console.log('Starting single player game...');
+            gameStarted = false; // Reset first
+            
+            // Hide ALL menu elements
+            const menuElements = [
+                'startScreen',
+                'multiplayerMenu',
+                'winScreen',
+                'roomCode',
+                'roomCodeInstructions',
+                'loadingScreen',
+                'errorScreen'
+            ];
+            
+            menuElements.forEach(elementId => {
+                const element = document.getElementById(elementId);
+                if (element) {
+                    element.style.display = 'none';
+                }
+            });
+            
+            // Remove old renderer and clean up
+            if (renderer && renderer.domElement && renderer.domElement.parentNode) {
+                cancelAnimationFrame(window.animationFrameId);
+                renderer.domElement.parentNode.removeChild(renderer.domElement);
+                renderer.dispose();
+            }
+
+            // Clean up old multiplayer resources
+            if (multiplayerManager) {
+                multiplayerManager.disconnect();
+                multiplayerManager = null;
+            }
+            
+            // Start fresh game
+            gameStarted = true;
+            gameMode = 'single';
+            init();
+        }
+
+        function animate() {
+            window.animationFrameId = requestAnimationFrame(animate);
+            
+            if (controls) {
+                controls();
+            }
+
+            // Only render if we have a valid scene and camera
+            if (scene && camera) {
+                renderer.render(scene, camera);
+            }
+        }
+
+        // Event Listeners
+        document.getElementById('singlePlayerButton').addEventListener('click', () => {
+            console.log('Single player button clicked');
+            gameMode = 'single';
+            startGame('single');
+        });
+        document.getElementById('multiplayerButton').addEventListener('click', () => {
+            console.log('Multiplayer button clicked');
+            showMultiplayerMenu();
+        });
+        document.getElementById('createRoomButton').addEventListener('click', () => {
+            console.log('Create room button clicked');
+            createRoom();
+        });
+        document.getElementById('joinRoomButton').addEventListener('click', () => {
+            console.log('Join room button clicked');
+            showJoinRoom();
+        });
+        document.getElementById('backToMainButton').addEventListener('click', () => {
+            document.getElementById('multiplayerMenu').style.display = 'none';
+            document.getElementById('startScreen').style.display = 'block';
+        });
+        document.getElementById('roomCodeInput').addEventListener('keyup', (e) => {
+            if (e.key === 'Enter') {
+                joinRoom();
+            }
+        });
+
+        // Handle window resizing
+        window.addEventListener('resize', () => {
+            if (camera && renderer) {
+                camera.aspect = window.innerWidth / window.innerHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(window.innerWidth, window.innerHeight);
+            }
+        });
+
+        // Clean up when leaving the game
+        window.addEventListener('beforeunload', () => {
+            if (multiplayerManager) {
+                multiplayerManager.disconnect();
+            }
+            gameStarted = false;
+        });
+
+        // Handle visibility change to prevent reconnection loops
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden && multiplayerManager) {
+                multiplayerManager.disconnect();
+            }
+        });
+
+        // Add handler for maze data in MultiplayerManager's handleMessage function
+        const originalHandleMessage = MultiplayerManager.prototype.handleMessage;
+        MultiplayerManager.prototype.handleMessage = function(message) {
+            if (message.type === 'maze_data') {
+                maze = message.maze;
+                generateNewMaze();
+            } else {
+                originalHandleMessage.call(this, message);
+            }
+        };
+    </script>
+</body>
+</html> 
