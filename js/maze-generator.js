@@ -31,6 +31,7 @@ class MazeGenerator {
         this.grid[this.height - 1][endX] = 0;
         this.grid[this.height - 2][endX] = 0;
         
+        // Set end position in world coordinates (multiply by cellSize)
         this.endPosition = { 
             x: endX * this.cellSize, 
             z: (this.height - 1) * this.cellSize 

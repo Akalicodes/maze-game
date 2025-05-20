@@ -12,6 +12,8 @@ app.use(express.static(path.join(__dirname)));
 
 // Store active rooms and their players
 const rooms = new Map();
+const ROOM_TIMEOUT = 30 * 60 * 1000; // 30 minutes room timeout
+const ACTIVITY_TIMEOUT = 15000; // 15 seconds activity timeout
 
 // Function to generate a unique room code
 function generateRoomCode() {
@@ -56,27 +58,40 @@ server.on('error', (error) => {
 function handleCreateRoom(ws) {
     const roomCode = generateRoomCode();
     const playerId = uuidv4();
+    const mazeSeed = Math.floor(Math.random() * 1000000);
     
-    console.log(`Creating new room with code: ${roomCode}`);
+    console.log(`Creating new room with code: ${roomCode}, seed: ${mazeSeed}`);
     
-    // Create new room
-    rooms.set(roomCode, {
+    // Create new room with roles and seed
+    const room = {
         host: playerId,
         players: new Map([[playerId, ws]]),
-        playerPositions: new Map()
-    });
+        playerPositions: new Map(),
+        roles: new Map([[playerId, 'player']]),
+        mazeSeed: mazeSeed,
+        mazeData: null,
+        createdAt: Date.now(),
+        lastActivity: Date.now(),
+        playerActivity: new Map([[playerId, Date.now()]])
+    };
+    
+    rooms.set(roomCode, room);
 
     // Store room code and player ID in the WebSocket object
     ws.roomCode = roomCode;
     ws.playerId = playerId;
+    ws.role = 'player';
+    ws.isAlive = true;
 
-    // Send room created confirmation
+    // Send room created confirmation with seed
     ws.send(JSON.stringify({
         type: 'room_created',
-        roomCode: roomCode
+        roomCode: roomCode,
+        role: 'player',
+        mazeSeed: mazeSeed
     }));
 
-    console.log(`Room ${roomCode} created by player ${playerId}`);
+    console.log(`Room ${roomCode} created by player ${playerId} as player with seed ${mazeSeed}`);
     console.log(`Active rooms: ${Array.from(rooms.keys()).join(', ')}`);
 }
 
@@ -85,9 +100,7 @@ function handleJoinRoom(ws, roomCode) {
     console.log(`Available rooms: ${Array.from(rooms.keys()).join(', ')}`);
     
     const room = rooms.get(roomCode);
-    
     if (!room) {
-        console.log(`Room ${roomCode} not found`);
         ws.send(JSON.stringify({
             type: 'error',
             error: 'Room not found'
@@ -96,7 +109,6 @@ function handleJoinRoom(ws, roomCode) {
     }
 
     if (room.players.size >= 2) {
-        console.log(`Room ${roomCode} is full`);
         ws.send(JSON.stringify({
             type: 'error',
             error: 'Room is full'
@@ -106,46 +118,63 @@ function handleJoinRoom(ws, roomCode) {
 
     const playerId = uuidv4();
     room.players.set(playerId, ws);
+    room.roles.set(playerId, 'guide');
     
-    // Store room code and player ID in the WebSocket object
     ws.roomCode = roomCode;
     ws.playerId = playerId;
+    ws.role = 'guide';
 
-    // Notify the joining player
+    // Send join confirmation with role
     ws.send(JSON.stringify({
         type: 'room_joined',
         roomCode: roomCode,
-        playerId: playerId
+        role: 'guide'
     }));
 
-    // Notify the host
-    const hostWs = room.players.get(room.host);
-    if (hostWs && hostWs.readyState === WebSocket.OPEN) {
-        hostWs.send(JSON.stringify({
-            type: 'player_joined',
-            playerId: playerId
+    // If maze data exists, send it immediately
+    if (room.mazeData) {
+        ws.send(JSON.stringify({
+            type: 'maze_data',
+            maze: room.mazeData
         }));
     }
 
-    console.log(`Player ${playerId} joined room ${roomCode}`);
+    // Notify host about the new player
+    const hostWs = room.players.get(room.host);
+    if (hostWs) {
+        hostWs.send(JSON.stringify({
+            type: 'player_joined',
+            playerId: playerId,
+            role: 'guide'
+        }));
+    }
+
+    console.log(`Player ${playerId} joined room ${roomCode} as guide`);
 }
 
 function handlePlayerMove(ws, data) {
+    console.log('Received player position:', data);
     const room = rooms.get(ws.roomCode);
-    if (!room) return;
+    if (!room) {
+        console.log('Room not found for player position:', ws.roomCode);
+        return;
+    }
 
-    // Store the player's position
+    // Update player position
     room.playerPositions.set(ws.playerId, {
         position: data.position,
         rotation: data.rotation
     });
 
-    // Broadcast position to other player
+    // Send position to all guide players
     room.players.forEach((playerWs, playerId) => {
-        if (playerId !== ws.playerId) {
+        if (room.roles.get(playerId) === 'guide') {
+            console.log('Sending position to guide:', {
+                position: data.position,
+                guideId: playerId
+            });
             playerWs.send(JSON.stringify({
-                type: 'player_move',
-                playerId: ws.playerId,
+                type: 'player_position',
                 position: data.position,
                 rotation: data.rotation
             }));
@@ -181,120 +210,185 @@ function handleDisconnect(ws) {
 }
 
 function handleMazeData(ws, data) {
+    console.log(`Handling maze data for room: ${ws.roomCode}`);
     const room = rooms.get(ws.roomCode);
-    if (!room) return;
+    if (!room) {
+        console.error('Room not found for maze data:', ws.roomCode);
+        return;
+    }
 
     // Only allow host to send maze data
-    if (ws.playerId !== room.host) return;
+    if (ws.playerId !== room.host) {
+        console.log('Ignoring maze data from non-host');
+        return;
+    }
+
+    // Validate maze data
+    if (!data.maze || !data.maze.maze || !Array.isArray(data.maze.maze) || 
+        !data.maze.startPosition || !data.maze.endPosition || !data.maze.cellSize) {
+        console.error('Invalid maze data received:', data.maze);
+        ws.send(JSON.stringify({
+            type: 'error',
+            error: 'Invalid maze data format'
+        }));
+        return;
+    }
 
     // Store maze data in room
     room.mazeData = data.maze;
 
-    // Send maze data to other players
+    // Send maze data to all guide players
     room.players.forEach((playerWs, playerId) => {
-        if (playerId !== ws.playerId) {
+        if (room.roles.get(playerId) === 'guide') {
             playerWs.send(JSON.stringify({
                 type: 'maze_data',
-                maze: data.maze
+                maze: room.mazeData
             }));
         }
     });
 }
 
-function validateMessage(data) {
-    if (!data || typeof data !== 'object') {
-        throw new Error('Invalid message format: message must be an object');
+function updateRoomActivity(roomCode, playerId) {
+    const room = rooms.get(roomCode);
+    if (room) {
+        room.lastActivity = Date.now();
+        if (playerId) {
+            room.playerActivity.set(playerId, Date.now());
+        }
+    }
+}
+
+function handleMessage(ws, data) {
+    try {
+        switch (data.type) {
+            case 'create_room':
+                handleCreateRoom(ws);
+                break;
+            case 'join_room':
+                handleJoinRoom(ws, data.roomCode);
+                break;
+            case 'restore_session':
+                handleRestoreSession(ws, data);
+                break;
+            case 'activity_update':
+                handleActivityUpdate(ws, data);
+                break;
+            case 'ping':
+                handlePing(ws);
+                break;
+            case 'player_position':
+                handlePlayerMove(ws, data);
+                break;
+            case 'maze_data':
+                handleMazeData(ws, data);
+                break;
+            default:
+                console.log('Unknown message type:', data.type);
+        }
+    } catch (error) {
+        console.error('Error handling message:', error);
+        ws.send(JSON.stringify({
+            type: 'error',
+            error: 'Failed to process message'
+        }));
+    }
+}
+
+function handleRestoreSession(ws, data) {
+    const { sessionId, state } = data;
+    const { roomCode, role, isHost } = state;
+    
+    console.log(`Attempting to restore session for room ${roomCode}`);
+    
+    const room = rooms.get(roomCode);
+    if (!room) {
+        ws.send(JSON.stringify({
+            type: 'error',
+            error: 'Room no longer exists'
+        }));
+        return;
     }
     
-    if (!data.type) {
-        throw new Error('Invalid message format: missing type field');
+    // Generate new player ID for the restored session
+    const playerId = uuidv4();
+    
+    // Update room state
+    room.players.set(playerId, ws);
+    room.roles.set(playerId, role);
+    room.playerActivity.set(playerId, Date.now());
+    
+    if (isHost) {
+        room.host = playerId;
     }
     
-    switch (data.type) {
-        case 'create_room':
-            // No additional validation needed
-            break;
-            
-        case 'join_room':
-            if (!data.roomCode || typeof data.roomCode !== 'string') {
-                throw new Error('Invalid join_room message: missing or invalid roomCode');
-            }
-            break;
-            
-        case 'maze_data':
-            if (!data.maze || typeof data.maze !== 'object') {
-                throw new Error('Invalid maze_data message: missing or invalid maze data');
-            }
-            break;
-            
-        case 'player_move':
-            if (!data.roomCode || typeof data.roomCode !== 'string') {
-                throw new Error('Invalid player_move message: missing or invalid roomCode');
-            }
-            if (!data.position || typeof data.position !== 'object') {
-                throw new Error('Invalid player_move message: missing or invalid position');
-            }
-            if (!data.rotation || typeof data.rotation !== 'object') {
-                throw new Error('Invalid player_move message: missing or invalid rotation');
-            }
-            break;
-            
-        case 'ping':
-            // No additional validation needed
-            break;
-            
-        default:
-            throw new Error(`Unknown message type: ${data.type}`);
+    // Update WebSocket state
+    ws.roomCode = roomCode;
+    ws.playerId = playerId;
+    ws.role = role;
+    
+    // Send confirmation
+    ws.send(JSON.stringify({
+        type: 'session_restored',
+        roomCode,
+        role,
+        mazeSeed: room.mazeSeed
+    }));
+    
+    // Notify other players
+    room.players.forEach((playerWs, pid) => {
+        if (pid !== playerId) {
+            playerWs.send(JSON.stringify({
+                type: 'player_rejoined',
+                playerId,
+                role
+            }));
+        }
+    });
+}
+
+function handleActivityUpdate(ws, data) {
+    const { sessionId, timestamp, state } = data;
+    if (ws.roomCode) {
+        updateRoomActivity(ws.roomCode, ws.playerId);
+    }
+}
+
+function handlePing(ws) {
+    ws.send(JSON.stringify({
+        type: 'pong',
+        timestamp: Date.now()
+    }));
+    if (ws.roomCode) {
+        updateRoomActivity(ws.roomCode, ws.playerId);
     }
 }
 
 // Handle new WebSocket connections
-wss.on('connection', (ws, req) => {
+wss.on('connection', (ws) => {
     console.log('New client connected');
     
-    // Set keep-alive to prevent timeouts
+    // Set initial connection state
     ws.isAlive = true;
+
+    // Handle pong responses
     ws.on('pong', () => {
         ws.isAlive = true;
+        if (ws.roomCode) {
+            updateRoomActivity(ws.roomCode, ws.playerId);
+        }
     });
 
     ws.on('message', (message) => {
         try {
-            // Convert Buffer to string if needed
-            const messageStr = message instanceof Buffer ? message.toString() : message;
-            const data = JSON.parse(messageStr);
-            console.log('Received:', data);
-
-            // Validate message format
-            validateMessage(data);
-
-            switch (data.type) {
-                case 'create_room':
-                    handleCreateRoom(ws);
-                    break;
-                case 'join_room':
-                    handleJoinRoom(ws, data.roomCode);
-                    break;
-                case 'player_move':
-                    handlePlayerMove(ws, data);
-                    break;
-                case 'maze_data':
-                    handleMazeData(ws, data);
-                    break;
-                case 'ping':
-                    ws.send(JSON.stringify({ type: 'pong' }));
-                    break;
-            }
+            const data = JSON.parse(message);
+            ws.isAlive = true;
+            handleMessage(ws, data);
         } catch (error) {
-            console.error('Error handling message:', error.message);
-            try {
-                ws.send(JSON.stringify({
-                    type: 'error',
-                    error: error.message || 'Invalid message format'
-                }));
-            } catch (sendError) {
-                console.error('Error sending error message:', sendError);
-            }
+            console.error('Error handling message:', error);
+            ws.send(JSON.stringify({
+                type: 'error',
+                error: 'Invalid message format'
+            }));
         }
     });
 
@@ -315,17 +409,63 @@ wss.on('connection', (ws, req) => {
     });
 });
 
-// Keep-alive interval
+// Keep-alive and room cleanup interval
 const interval = setInterval(() => {
+    const now = Date.now();
+    
     wss.clients.forEach((ws) => {
         if (ws.isAlive === false) {
+            console.log('Client connection timed out, disconnecting...');
             handleDisconnect(ws);
             return ws.terminate();
         }
+        
         ws.isAlive = false;
-        ws.ping();
+        try {
+            ws.ping();
+        } catch (error) {
+            console.error('Error sending ping:', error);
+        }
     });
-}, 30000);
+
+    // Clean up inactive rooms and players
+    for (const [roomCode, room] of rooms.entries()) {
+        const inactiveTime = now - room.lastActivity;
+        
+        // Check individual player activity
+        for (const [playerId, lastActivity] of room.playerActivity.entries()) {
+            const playerInactiveTime = now - lastActivity;
+            if (playerInactiveTime > ACTIVITY_TIMEOUT) {
+                console.log(`Player ${playerId} inactive for ${playerInactiveTime}ms in room ${roomCode}`);
+                const playerWs = room.players.get(playerId);
+                if (playerWs) {
+                    playerWs.send(JSON.stringify({
+                        type: 'warning',
+                        message: 'No activity detected, please respond to maintain connection'
+                    }));
+                }
+            }
+        }
+        
+        // Clean up room if inactive
+        if (inactiveTime > ROOM_TIMEOUT) {
+            console.log(`Room ${roomCode} inactive for ${inactiveTime}ms, cleaning up...`);
+            room.players.forEach((ws) => {
+                try {
+                    ws.send(JSON.stringify({
+                        type: 'error',
+                        error: 'Room timed out due to inactivity'
+                    }));
+                    handleDisconnect(ws);
+                    ws.close();
+                } catch (error) {
+                    console.error('Error closing connection:', error);
+                }
+            });
+            rooms.delete(roomCode);
+        }
+    }
+}, 5000); // Check every 5 seconds
 
 wss.on('close', () => {
     clearInterval(interval);

@@ -19,7 +19,7 @@
             margin: 0;
             overflow: hidden;
             font-family: Arial, sans-serif;
-            cursor: none;
+            pointer-events: auto !important;
         }
         #startScreen {
             position: absolute;
@@ -31,6 +31,7 @@
             color: white;
             padding: 30px;
             z-index: 1000;
+            pointer-events: auto !important;
         }
         #startScreen h1 {
             color: #4CAF50;
@@ -256,7 +257,10 @@
         }
         /* Remove crosshair cursor */
         canvas {
-            cursor: none;
+            pointer-events: auto !important;
+            cursor: default !important;
+            outline: none;
+            z-index: 1;
         }
         
         /* Update win screen styles */
@@ -276,12 +280,9 @@
             background: #45a049;
             transform: scale(1.1);
         }
-        canvas {
-            cursor: none !important;
-            outline: none;
-        }
         * {
-            cursor: auto;
+            pointer-events: auto !important;
+            cursor: default;
         }
         #gameContainer {
             position: relative;
@@ -289,7 +290,7 @@
             height: 100%;
         }
         .no-cursor {
-            cursor: none !important;
+            cursor: none;
         }
         .game-canvas {
             outline: none;
@@ -300,14 +301,41 @@
             -ms-user-select: none;
             user-select: none;
             -webkit-tap-highlight-color: transparent;
+            pointer-events: auto !important;
+        }
+        #guideInstructions {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: #4CAF50;
+            font-size: 18px;
+            text-shadow: 0 0 5px rgba(76, 175, 80, 0.5);
+        }
+        #guideView {
+            display: none;
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: #000;
+            pointer-events: auto !important;
+        }
+        #guideCanvas {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: #111;
+            pointer-events: auto !important;
         }
     </style>
 </head>
 <body class="no-cursor">
     <div id="startScreen">
         <h1>3D Maze Game</h1>
-        <div class="instruction">W/S or ↑/↓ = Move Forward/Back</div>
-        <div class="instruction">A/D or ←/→ = Turn Left/Right</div>
+        <div class="instruction">Navigate through the maze to find the exit</div>
+        <div class="instruction">Use WASD to move and mouse to look around</div>
         <button class="gameButton" id="singlePlayerButton">Single Player</button>
         <button class="gameButton" id="multiplayerButton">Multiplayer</button>
     </div>
@@ -338,7 +366,18 @@
     <div id="winScreen">
         <h2>🎉 You Won! 🎉</h2>
         <p>Congratulations! You made it through the maze!</p>
-        <button onclick="startGame('single')">Play Again</button>
+        <p>Refresh the page to play again</p>
+    </div>
+
+    <div id="guideView" style="display: none;">
+        <canvas id="guideCanvas"></canvas>
+        <div id="guideInstructions">
+            Guide View - Help the player reach the green exit!
+            <br>
+            Player position is shown as a blue square
+            <br>
+            Exit is shown as a green square
+        </div>
     </div>
 
     <script>
@@ -347,10 +386,13 @@
         const MAZE_SIZE = { width: 25, height: 25 };
         let keydownListener, keyupListener;
         let textureLoader;
-        let gameMode = 'single'; // 'single' or 'multiplayer'
+        let gameMode = 'single';
         let multiplayerManager = null;
         let otherPlayer = null;
         let gameStarted = false;
+        let playerRole = null;
+        let guideCanvas, guideCtx;
+        let playerPosition = null;
 
         function createRoom() {
             if (gameStarted) {
@@ -375,12 +417,11 @@
                 hideLoadingScreen();
                 
                 // Hide all menus
-                document.getElementById('multiplayerMenu').style.display = 'none';
-                document.getElementById('startScreen').style.display = 'none';
+                hideAllMenus();
                 
                 // Show the room code prominently
                 const roomCodeElement = document.getElementById('roomCode');
-                roomCodeElement.style.display = 'block';  // Explicitly show the element
+                roomCodeElement.style.display = 'block';
                 roomCodeElement.textContent = roomCode;
                 
                 // Show instructions
@@ -390,25 +431,28 @@
                 
                 // Set the game mode and initialize
                 gameMode = 'multiplayer';
-                init();
-
-                // Log the room code element's visibility state
-                console.log('Room code element:', {
-                    display: roomCodeElement.style.display,
-                    visibility: window.getComputedStyle(roomCodeElement).visibility,
-                    zIndex: window.getComputedStyle(roomCodeElement).zIndex,
-                    content: roomCodeElement.textContent
-                });
+                playerRole = 'player'; // Make sure player role is set
+                init(); // Initialize the game
+                gameStarted = true; // Set game as started
+                animate(); // Start the animation loop
             };
 
             multiplayerManager.onPlayerJoined = (playerId) => {
                 console.log('Player joined:', playerId);
-                // Hide the room code and instructions
-                document.getElementById('roomCode').style.display = 'none';
-                document.getElementById('roomCodeInstructions').style.display = 'none';
-                
-                // Start the multiplayer game
-                startMultiplayerGame();
+                // Hide the room code and instructions only if we're the host
+                if (multiplayerManager.isHost) {
+                    document.getElementById('roomCode').style.display = 'none';
+                    document.getElementById('roomCodeInstructions').style.display = 'none';
+                }
+            };
+
+            multiplayerManager.onPlayerLeft = (playerId) => {
+                console.log('Player left:', playerId);
+                // If we're the host and the guide left, show the room code again
+                if (multiplayerManager.isHost) {
+                    document.getElementById('roomCode').style.display = 'block';
+                    document.getElementById('roomCodeInstructions').style.display = 'block';
+                }
             };
 
             multiplayerManager.onError = (error) => {
@@ -440,15 +484,98 @@
             }
         }
 
+        function startGame(mode = 'single') {
+            if (mode === 'multiplayer') {
+                console.log('Redirecting multiplayer start to startMultiplayerGame');
+                startMultiplayerGame();
+                return;
+            }
+            
+            console.log('Starting single player game...');
+            gameStarted = false; // Reset first
+            playerRole = 'player'; // Set role for single player
+            
+            // Hide ALL menu elements
+            hideAllMenus();
+            
+            // Remove old renderer and clean up
+            cleanupRenderer();
+
+            // Clean up old multiplayer resources
+            cleanupMultiplayer();
+            
+            // Start fresh game
+            gameStarted = true;
+            gameMode = mode;
+            init();
+        }
+
+        function hideAllMenus() {
+            const menuElements = [
+                'startScreen',
+                'multiplayerMenu',
+                'winScreen',
+                'roomCode',
+                'roomCodeInstructions',
+                'loadingScreen',
+                'errorScreen',
+                'guideView'
+            ];
+            
+            menuElements.forEach(elementId => {
+                const element = document.getElementById(elementId);
+                if (element) {
+                    element.style.display = 'none';
+                }
+            });
+        }
+
+        function cleanupRenderer() {
+            if (renderer && renderer.domElement && renderer.domElement.parentNode) {
+                cancelAnimationFrame(window.animationFrameId);
+                
+                // Remove pointer lock event listeners
+                document.removeEventListener('pointerlockchange', onPointerLockChange);
+                document.removeEventListener('pointerlockerror', onPointerLockError);
+                document.removeEventListener('mousemove', onMouseMove);
+                
+                // Exit pointer lock if active
+                if (document.pointerLockElement === renderer.domElement) {
+                    document.exitPointerLock();
+                }
+                
+                renderer.domElement.parentNode.removeChild(renderer.domElement);
+                renderer.dispose();
+            }
+        }
+
+        function cleanupMultiplayer() {
+            if (multiplayerManager) {
+                multiplayerManager.disconnect();
+                multiplayerManager = null;
+            }
+        }
+
         function init() {
-            console.log('Initializing game in mode:', gameMode);
+            console.log('Initializing game in mode:', gameMode, 'role:', playerRole);
             
             try {
-                // Initialize scene
+                if (playerRole === 'guide') {
+                    // Initialize guide view
+                    document.body.style.cursor = 'default';
+                    if (maze) {
+                        initGuideView(maze);
+                    } else {
+                        console.error('No maze data available for guide view');
+                        document.body.innerHTML = '<div style="color: red; text-align: center; margin-top: 50px;">Error: No maze data available. Please try refreshing the page.</div>';
+                    }
+                    return;
+                }
+                
+                // Initialize 3D view for player
                 scene = new THREE.Scene();
                 scene.background = new THREE.Color(0x000000);
                 
-                // Initialize renderer with antialiasing
                 renderer = new THREE.WebGLRenderer({ 
                     antialias: true,
                     powerPreference: "high-performance"
@@ -457,34 +584,44 @@
                 renderer.setPixelRatio(window.devicePixelRatio);
                 document.body.appendChild(renderer.domElement);
                 
-                // Initialize camera
                 camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
                 
-                // Initialize texture loader
                 textureLoader = new THREE.TextureLoader();
                 
-                // Generate maze using MazeGenerator
-                const generator = new MazeGenerator(MAZE_SIZE.width, MAZE_SIZE.height);
-                maze = generator.generate();
+                // Generate new maze for single player or host
+                if (gameMode === 'single' || (multiplayerManager && multiplayerManager.isHost && !maze)) {
+                    const generator = new MazeGenerator(MAZE_SIZE.width, MAZE_SIZE.height);
+                    maze = generator.generate();
+                    
+                    // Send maze data immediately if we're the host
+                    if (multiplayerManager && multiplayerManager.isHost) {
+                        console.log('Host sending initial maze data:', maze);
+                        multiplayerManager.socket.send(JSON.stringify({
+                            type: 'maze_data',
+                            maze: maze
+                        }));
+                    }
+                }
                 
-                // Set camera position after maze is generated
+                if (!maze) {
+                    throw new Error('No maze data available');
+                }
+                
                 camera.position.set(
                     maze.startPosition.x,
-                    1.5, // Eye level height
+                    1.5,
                     maze.startPosition.z
                 );
                 
-                // Create maze geometry
                 mazeGroup = new THREE.Group();
                 generateNewMaze();
                 
-                // Set up controls
+                // Set up controls and start animation
                 controls = setupControls();
-                
-                // Start animation loop
+                gameStarted = true;
                 animate();
                 
-                console.log('Game initialized in mode:', gameMode);
+                console.log('Game initialized in mode:', gameMode, 'role:', playerRole);
             } catch (error) {
                 console.error('Error initializing game:', error);
                 document.body.innerHTML = '<div style="color: red; text-align: center; margin-top: 50px;">Error: Failed to initialize game. Please try refreshing the page.</div>';
@@ -500,18 +637,10 @@
                 mazeGroup = new THREE.Group();
             }
 
-            // Only generate new maze if we're the host or in single player
-            if (gameMode === 'single' || (multiplayerManager && multiplayerManager.isHost)) {
+            // Only generate new maze if we're in single player mode
+            if (gameMode === 'single') {
                 const generator = new MazeGenerator(MAZE_SIZE.width, MAZE_SIZE.height);
                 maze = generator.generate();
-                
-                // If we're the host, send the maze data to the other player
-                if (multiplayerManager && multiplayerManager.isHost) {
-                    multiplayerManager.socket.send(JSON.stringify({
-                        type: 'maze_data',
-                        maze: maze
-                    }));
-                }
             }
             
             mazeGroup = new THREE.Group();
@@ -643,10 +772,11 @@
             });
             const endMarker = new THREE.Mesh(endMarkerGeometry, endMarkerMaterial);
             
+            // Place end marker at the correct world position (don't multiply by cellSize again)
             endMarker.position.set(
-                maze.endPosition.x * maze.cellSize,
+                maze.endPosition.x,
                 0.05,
-                maze.endPosition.z * maze.cellSize
+                maze.endPosition.z
             );
             
             // Add point light to end marker for glow
@@ -710,7 +840,7 @@
             const moveSpeed = 0.15;
             const turnSpeed = 0.06;
             let lastTime = performance.now();
-            let lastPosition = new THREE.Vector3();
+            let isPointerLocked = false;
             
             const keys = {
                 forward: false,
@@ -719,7 +849,56 @@
                 right: false
             };
 
+            // Remove any existing listeners
+            if (keydownListener) document.removeEventListener('keydown', keydownListener);
+            if (keyupListener) document.removeEventListener('keyup', keyupListener);
+
+            // Mouse movement handler
+            function onMouseMove(event) {
+                if (isPointerLocked && gameStarted && playerRole === 'player') {
+                    camera.rotation.y -= event.movementX * 0.002;
+                    document.body.style.cursor = 'none';
+                }
+            }
+
+            // Pointer lock change handler
+            function onPointerLockChange() {
+                isPointerLocked = document.pointerLockElement === renderer.domElement;
+                if (isPointerLocked) {
+                    document.body.style.cursor = 'none';
+                } else {
+                    document.body.style.cursor = 'default';
+                }
+            }
+
+            // Pointer lock error handler
+            function onPointerLockError() {
+                console.error('Pointer lock error');
+            }
+
+            // Add pointer lock event listeners
+            document.addEventListener('pointerlockchange', onPointerLockChange);
+            document.addEventListener('pointerlockerror', onPointerLockError);
+            document.addEventListener('mousemove', onMouseMove);
+
+            // Handle click to start pointer lock
+            if (renderer && renderer.domElement) {
+                renderer.domElement.addEventListener('click', () => {
+                    if (!isPointerLocked && gameStarted && playerRole === 'player') {
+                        renderer.domElement.requestPointerLock();
+                    }
+                });
+            }
+
+            // Handle ESC key to exit pointer lock
+            document.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape' && isPointerLocked) {
+                    document.exitPointerLock();
+                }
+            });
+
             keydownListener = (e) => {
+                console.log('Key pressed:', e.key.toLowerCase());
                 switch(e.key.toLowerCase()) {
                     case 'w':
                     case 'arrowup':
@@ -761,10 +940,7 @@
                 }
             };
 
-            // Remove any existing listeners
-            if (keydownListener) document.removeEventListener('keydown', keydownListener);
-            if (keyupListener) document.removeEventListener('keyup', keyupListener);
-
+            // Add event listeners
             document.addEventListener('keydown', keydownListener);
             document.addEventListener('keyup', keyupListener);
 
@@ -772,9 +948,6 @@
                 const currentTime = performance.now();
                 const deltaTime = Math.min((currentTime - lastTime) / 16.67, 2.0);
                 lastTime = currentTime;
-
-                // Store current position
-                lastPosition.copy(camera.position);
 
                 // Apply rotation
                 if (keys.left) camera.rotation.y += turnSpeed * deltaTime;
@@ -801,6 +974,11 @@
                     if (!collisionResult.collision) {
                         // No collision, safe to move
                         camera.position.copy(testPosition);
+                        console.log('Player moved to:', {
+                            x: camera.position.x,
+                            y: camera.position.y,
+                            z: camera.position.z
+                        });
                     } else {
                         // We hit a wall - first try to slide
                         const wallNormal = collisionResult.wallNormal;
@@ -846,8 +1024,8 @@
                 
                 // Check if reached end
                 const distanceToEnd = new THREE.Vector2(
-                    camera.position.x - maze.endPosition.x * maze.cellSize,
-                    camera.position.z - maze.endPosition.z * maze.cellSize
+                    camera.position.x - maze.endPosition.x,
+                    camera.position.z - maze.endPosition.z
                 ).length();
                 
                 if (distanceToEnd < 1) {
@@ -865,13 +1043,16 @@
         // Show the multiplayer menu
         function showMultiplayerMenu() {
             console.log('Showing multiplayer menu');
+            if (gameStarted) {
+                console.log('Game in progress, cleaning up first');
+                cleanupRenderer();
+                cleanupMultiplayer();
+            }
+            
             gameStarted = false;
             gameMode = 'single'; // Reset game mode
-            document.getElementById('startScreen').style.display = 'none';
+            hideAllMenus();
             document.getElementById('multiplayerMenu').style.display = 'block';
-            document.getElementById('roomCode').style.display = 'none';
-            document.getElementById('roomCodeInstructions').style.display = 'none';
-            document.getElementById('roomCodeInput').style.display = 'none';
             document.getElementById('createRoomButton').style.display = 'block';
             document.getElementById('joinRoomButton').style.display = 'block';
         }
@@ -903,8 +1084,8 @@
                 multiplayerManager.joinRoom(roomCode);
             };
 
-            multiplayerManager.onRoomJoined = (playerId) => {
-                console.log('Successfully joined room:', roomCode, 'as player:', playerId);
+            multiplayerManager.onRoomJoined = () => {
+                console.log('Successfully joined room:', roomCode);
                 hideLoadingScreen();
                 
                 // Hide all menus
@@ -912,12 +1093,12 @@
                 document.getElementById('multiplayerMenu').style.display = 'none';
                 document.getElementById('roomCodeInput').style.display = 'none';
                 
-                // Set the game mode and initialize the game first
+                // Set the game mode and role
                 gameMode = 'multiplayer';
-                init();  // Initialize the game first
+                playerRole = 'guide';
                 
-                // Then start multiplayer components
-                startMultiplayerGame();
+                // Initialize guide view when maze data is received
+                // The actual initialization will happen in the maze_data message handler
             };
 
             multiplayerManager.onError = (error) => {
@@ -986,62 +1167,239 @@
             });
         }
 
-        function startGame(mode = 'single') {
-            if (mode === 'multiplayer') {
-                console.log('Redirecting multiplayer start to startMultiplayerGame');
-                startMultiplayerGame();
-                return;
-            }
-            
-            console.log('Starting single player game...');
-            gameStarted = false; // Reset first
-            
-            // Hide ALL menu elements
-            const menuElements = [
-                'startScreen',
-                'multiplayerMenu',
-                'winScreen',
-                'roomCode',
-                'roomCodeInstructions',
-                'loadingScreen',
-                'errorScreen'
-            ];
-            
-            menuElements.forEach(elementId => {
-                const element = document.getElementById(elementId);
-                if (element) {
-                    element.style.display = 'none';
+        function initGuideView(mazeData) {
+            try {
+                if (!mazeData?.maze) throw new Error('Invalid maze data');
+
+                // Clean up
+                if (renderer?.domElement?.parentNode) {
+                    renderer.domElement.parentNode.removeChild(renderer.domElement);
+                    renderer.dispose();
                 }
-            });
-            
-            // Remove old renderer and clean up
-            if (renderer && renderer.domElement && renderer.domElement.parentNode) {
-                cancelAnimationFrame(window.animationFrameId);
-                renderer.domElement.parentNode.removeChild(renderer.domElement);
-                renderer.dispose();
+
+                // Hide other screens
+                ['startScreen', 'multiplayerMenu', 'winScreen', 'loadingScreen'].forEach(id => {
+                    const element = document.getElementById(id);
+                    if (element) element.style.display = 'none';
+                });
+
+                // Setup guide container
+                const guideView = document.getElementById('guideView');
+                guideView.style.cssText = `
+                    position: fixed;
+                    top: 0;
+                    left: 0;
+                    width: 100vw;
+                    height: 100vh;
+                    display: flex;
+                    justify-content: center;
+                    align-items: center;
+                    background-color: #000000;
+                `;
+                guideView.style.display = 'block';
+
+                // Setup canvas
+                guideCanvas = document.getElementById('guideCanvas');
+                guideCtx = guideCanvas.getContext('2d');
+
+                // Calculate optimal size
+                const margin = 80;
+                const maxWidth = window.innerWidth - margin * 2;
+                const maxHeight = window.innerHeight - margin * 2;
+                
+                // Calculate cell size to maintain aspect ratio
+                const mazeWidth = mazeData.maze[0].length;
+                const mazeHeight = mazeData.maze.length;
+                const cellSizeX = Math.floor(maxWidth / mazeWidth);
+                const cellSizeY = Math.floor(maxHeight / mazeHeight);
+                const cellSize = Math.min(cellSizeX, cellSizeY);
+
+                // Set canvas size
+                guideCanvas.width = mazeWidth * cellSize + margin * 2;
+                guideCanvas.height = mazeHeight * cellSize + margin * 2;
+
+                // Store settings globally
+                window.guideViewConfig = {
+                    cellSize,
+                    margin,
+                    mazeWidth,
+                    mazeHeight,
+                    worldCellSize: mazeData.cellSize
+                };
+
+                // Initial draw
+                drawGuideView(mazeData, null);
+                gameStarted = true;
+
+            } catch (error) {
+                console.error('Guide view error:', error);
+                const msg = document.createElement('div');
+                msg.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:rgba(0,0,0,0.8);color:red;padding:20px;border-radius:10px;text-align:center;';
+                msg.innerHTML = `Error: ${error.message}<br><button onclick="location.reload()" style="margin-top:15px;padding:10px;background:white;color:red;border:none;border-radius:5px;cursor:pointer;">Reload</button>`;
+                document.body.appendChild(msg);
+            }
+        }
+
+        function drawGuideView(mazeData, playerPos) {
+            const config = window.guideViewConfig;
+            if (!config || !mazeData?.maze) return;
+
+            const { cellSize, margin, worldCellSize } = config;
+
+            // Clear canvas
+            guideCtx.fillStyle = '#000000';
+            guideCtx.fillRect(0, 0, guideCanvas.width, guideCanvas.height);
+
+            // Draw floor with lighter color
+            guideCtx.fillStyle = '#e0e0e0'; // Light gray
+            guideCtx.fillRect(
+                margin, 
+                margin, 
+                mazeData.maze[0].length * cellSize,
+                mazeData.maze.length * cellSize
+            );
+
+            // Draw walls with darker color - flip the z-axis by using (mazeData.maze.length - 1 - z)
+            for (let z = 0; z < mazeData.maze.length; z++) {
+                for (let x = 0; x < mazeData.maze[z].length; x++) {
+                    if (mazeData.maze[z][x] === 1) {
+                        guideCtx.fillStyle = '#1a1a1a'; // Very dark gray
+                        guideCtx.fillRect(
+                            (mazeData.maze[z].length - 1 - x) * cellSize + margin,
+                            (mazeData.maze.length - 1 - z) * cellSize + margin,
+                            cellSize,
+                            cellSize
+                        );
+                    }
+                }
             }
 
-            // Clean up old multiplayer resources
-            if (multiplayerManager) {
-                multiplayerManager.disconnect();
-                multiplayerManager = null;
-            }
+            // Draw exit - flip both x and z coordinates
+            const exitX = Math.floor((mazeData.maze[0].length - 1 - (mazeData.endPosition.x / worldCellSize))) * cellSize + margin;
+            const exitZ = Math.floor(mazeData.maze.length - 1 - (mazeData.endPosition.z / worldCellSize)) * cellSize + margin;
             
-            // Start fresh game
-            gameStarted = true;
-            gameMode = 'single';
-            init();
+            // Draw exit marker with glow effect
+            guideCtx.shadowColor = '#4CAF50';
+            guideCtx.shadowBlur = 20;
+            guideCtx.fillStyle = '#4CAF50';
+            
+            // Draw a larger marker to make it more visible
+            const exitMarkerSize = cellSize * 1.2;
+            guideCtx.fillRect(
+                exitX - (exitMarkerSize - cellSize) / 2,
+                exitZ - (exitMarkerSize - cellSize) / 2,
+                exitMarkerSize,
+                exitMarkerSize
+            );
+            
+            // Draw player marker with improved visibility - flip the x coordinate
+            if (playerPos?.x != null && playerPos?.z != null) {
+                // Convert world position to grid position (snapped to cells)
+                const gridX = Math.round((mazeData.maze[0].length - 1 - playerPos.x / worldCellSize));
+                const gridZ = Math.round((mazeData.maze.length - 1 - playerPos.z / worldCellSize));
+                
+                // Convert grid position back to canvas coordinates
+                const canvasX = gridX * cellSize + margin + (cellSize / 2);
+                const canvasZ = gridZ * cellSize + margin + (cellSize / 2);
+
+                // Draw blue glow effect
+                guideCtx.shadowColor = '#2196F3';
+                guideCtx.shadowBlur = 15;
+                
+                // Draw player marker as a square that fits perfectly in the cell
+                const squareSize = cellSize * 0.9; // Make it slightly smaller than the cell for visibility
+                guideCtx.fillStyle = '#2196F3';
+                guideCtx.fillRect(
+                    canvasX - squareSize/2,
+                    canvasZ - squareSize/2,
+                    squareSize,
+                    squareSize
+                );
+                
+                // Add white border
+                guideCtx.strokeStyle = '#FFFFFF';
+                guideCtx.lineWidth = 2;
+                guideCtx.strokeRect(
+                    canvasX - squareSize/2,
+                    canvasZ - squareSize/2,
+                    squareSize,
+                    squareSize
+                );
+
+                // Draw direction indicator (arrow)
+                if (playerPos.rotation?.y != null) {
+                    const arrowLength = squareSize * 0.8;
+                    
+                    // Calculate arrow endpoint using player's rotation - adjust for flipped x-axis
+                    const angle = -playerPos.rotation.y - Math.PI / 2;
+                    const endX = canvasX - Math.cos(angle) * arrowLength;
+                    const endZ = canvasZ - Math.sin(angle) * arrowLength;
+                    
+                    // Draw arrow line
+                    guideCtx.beginPath();
+                    guideCtx.moveTo(canvasX, canvasZ);
+                    guideCtx.lineTo(endX, endZ);
+                    guideCtx.strokeStyle = '#FFEB3B'; // Yellow color for visibility
+                    guideCtx.lineWidth = 3;
+                    guideCtx.stroke();
+                    
+                    // Draw arrow head
+                    const headLength = squareSize * 0.4;
+                    const headAngle = Math.PI / 6; // 30 degrees
+                    
+                    guideCtx.beginPath();
+                    guideCtx.moveTo(endX, endZ);
+                    guideCtx.lineTo(
+                        endX + headLength * Math.cos(angle - headAngle),
+                        endZ + headLength * Math.sin(angle - headAngle)
+                    );
+                    guideCtx.moveTo(endX, endZ);
+                    guideCtx.lineTo(
+                        endX + headLength * Math.cos(angle + headAngle),
+                        endZ + headLength * Math.sin(angle + headAngle)
+                    );
+                    guideCtx.strokeStyle = '#FFEB3B';
+                    guideCtx.lineWidth = 3;
+                    guideCtx.stroke();
+                }
+
+                // Reset shadow
+                guideCtx.shadowBlur = 0;
+            }
         }
 
         function animate() {
-            window.animationFrameId = requestAnimationFrame(animate);
+            requestAnimationFrame(animate);
             
-            if (controls) {
-                controls();
+            if (gameStarted && controls) {
+                controls(); // Call the controls update function
+                
+                if (playerRole === 'player' && multiplayerManager && multiplayerManager.connected) {
+                    // Send position update to server
+                    const position = {
+                        x: camera.position.x,
+                        y: camera.position.y,
+                        z: camera.position.z
+                    };
+                    const rotation = {
+                        x: camera.rotation.x,
+                        y: camera.rotation.y,
+                        z: camera.rotation.z
+                    };
+                    
+                    // Send position and rotation update to server
+                    if (multiplayerManager.socket && multiplayerManager.socket.readyState === WebSocket.OPEN) {
+                        multiplayerManager.socket.send(JSON.stringify({
+                            type: 'player_position',
+                            position: position,
+                            rotation: rotation,
+                            roomCode: multiplayerManager.roomCode
+                        }));
+                    }
+                }
             }
-
-            // Only render if we have a valid scene and camera
-            if (scene && camera) {
+            
+            if (renderer && scene && camera) {
                 renderer.render(scene, camera);
             }
         }
@@ -1049,7 +1407,6 @@
         // Event Listeners
         document.getElementById('singlePlayerButton').addEventListener('click', () => {
             console.log('Single player button clicked');
-            gameMode = 'single';
             startGame('single');
         });
         document.getElementById('multiplayerButton').addEventListener('click', () => {
@@ -1074,6 +1431,11 @@
             }
         });
 
+        // Add click handler for room code copying
+        document.getElementById('roomCode').addEventListener('click', function() {
+            copyRoomCode(this);
+        });
+
         // Handle window resizing
         window.addEventListener('resize', () => {
             if (camera && renderer) {
@@ -1093,17 +1455,172 @@
 
         // Handle visibility change to prevent reconnection loops
         document.addEventListener('visibilitychange', () => {
-            if (document.hidden && multiplayerManager) {
-                multiplayerManager.disconnect();
+            if (document.hidden) {
+                console.log('Page hidden, handling cleanup...');
+                // Store current game state before going hidden
+                if (multiplayerManager && multiplayerManager.gameState.active) {
+                    multiplayerManager.gameState.lastKnownState = {
+                        roomCode: multiplayerManager.roomCode,
+                        role: multiplayerManager.role,
+                        isHost: multiplayerManager.isHost,
+                        position: playerPosition
+                    };
+                }
+            } else {
+                console.log('Page visible, checking game state...');
+                if (multiplayerManager && multiplayerManager.gameState.active) {
+                    // Verify connection and game state when becoming visible
+                    if (!multiplayerManager.connected || multiplayerManager.gameState.reconnecting) {
+                        console.log('Connection lost while hidden, attempting to restore...');
+                        multiplayerManager.connect();
+                    } else {
+                        // Send a ping to verify connection is still alive
+                        multiplayerManager.socket.send(JSON.stringify({
+                            type: 'ping',
+                            timestamp: Date.now()
+                        }));
+                    }
+                }
             }
         });
 
-        // Add handler for maze data in MultiplayerManager's handleMessage function
+        // Update the MultiplayerManager to handle disconnections better
+        MultiplayerManager.prototype.handleDisconnect = function() {
+            console.log('Handling disconnection...');
+            this.connected = false;
+            
+            if (gameStarted && !this.disconnecting) {
+                // Show a reconnection message
+                let reconnectMessage = document.getElementById('reconnectMessage');
+                if (!reconnectMessage) {
+                    reconnectMessage = document.createElement('div');
+                    reconnectMessage.id = 'reconnectMessage';
+                    reconnectMessage.style.cssText = `
+                        position: fixed;
+                        top: 50%;
+                        left: 50%;
+                        transform: translate(-50%, -50%);
+                        background: rgba(0, 0, 0, 0.8);
+                        color: white;
+                        padding: 20px;
+                        border-radius: 10px;
+                        z-index: 1000;
+                        text-align: center;
+                    `;
+                    document.body.appendChild(reconnectMessage);
+                }
+                
+                reconnectMessage.innerHTML = `
+                    <h3>Connection Lost</h3>
+                    <p>Attempting to reconnect...</p>
+                    <button onclick="location.reload()" style="margin-top: 10px; padding: 5px 10px;">Restart Game</button>
+                `;
+                
+                // Try to reconnect
+                this.reconnect();
+                
+                // Set a timeout to show the menu if reconnection fails
+                setTimeout(() => {
+                    if (!this.connected && gameStarted) {
+                        console.log('Reconnection failed, showing start screen');
+                        hideAllMenus();
+                        
+                        // Only show start screen if we're completely disconnected
+                        if (!this.socket || this.socket.readyState !== WebSocket.CONNECTING) {
+                            document.getElementById('startScreen').style.display = 'block';
+                            gameStarted = false;
+                            
+                            // Remove reconnect message
+                            if (reconnectMessage) {
+                                reconnectMessage.remove();
+                            }
+                            
+                            // Show an error message to the user
+                            alert('Lost connection to the game. Please try again.');
+                        }
+                    }
+                }, 15000); // Give even more time for reconnection attempts
+            }
+        };
+
+        // Modify MultiplayerManager message handling
         const originalHandleMessage = MultiplayerManager.prototype.handleMessage;
         MultiplayerManager.prototype.handleMessage = function(message) {
+            console.log('Handling message:', message);
+            
             if (message.type === 'maze_data') {
+                console.log('Received maze data:', message.maze);
+                if (!message.maze) {
+                    console.error('Invalid maze data received');
+                    return;
+                }
                 maze = message.maze;
-                generateNewMaze();
+                if (playerRole === 'guide') {
+                    console.log('Guide received maze data, initializing view');
+                    // Remove loading message if it exists
+                    const loadingMessage = document.getElementById('guideLoadingMessage');
+                    if (loadingMessage) {
+                        loadingMessage.remove();
+                    }
+                    // Show guide view
+                    document.getElementById('guideView').style.display = 'block';
+                    initGuideView(maze);
+                } else {
+                    generateNewMaze();
+                }
+            } else if (message.type === 'player_position' && playerRole === 'guide') {
+                console.log('Guide received player position:', message.position);
+                if (!message.position || typeof message.position.x !== 'number' || typeof message.position.z !== 'number') {
+                    console.error('Invalid player position received:', message.position);
+                    return;
+                }
+                
+                // Update player position and redraw immediately
+                playerPosition = {
+                    x: message.position.x,
+                    y: message.position.y,
+                    z: message.position.z,
+                    rotation: message.rotation
+                };
+                
+                if (maze && guideCanvas && guideCtx) {
+                    console.log('Drawing guide view with player position:', playerPosition);
+                    drawGuideView(maze, playerPosition);
+                } else {
+                    console.error('Missing required objects for guide view:', {
+                        hasMaze: !!maze,
+                        hasCanvas: !!guideCanvas,
+                        hasContext: !!guideCtx
+                    });
+                }
+            } else if (message.type === 'room_created') {
+                playerRole = message.role;
+                this.roomCode = message.roomCode;
+                this.isHost = true;
+                if (this.onRoomCreated) {
+                    this.onRoomCreated(message.roomCode);
+                }
+            } else if (message.type === 'room_joined') {
+                console.log('Room joined message:', message);
+                playerRole = message.role;
+                this.roomCode = message.roomCode;
+                
+                if (this.onRoomJoined) {
+                    this.onRoomJoined();
+                }
+            } else if (message.type === 'error') {
+                console.error('Server error:', message.error);
+                if (this.onError) {
+                    this.onError(message.error);
+                }
+            } else if (message.type === 'player_joined') {
+                if (this.onPlayerJoined) {
+                    this.onPlayerJoined(message.playerId, message.role);
+                }
+            } else if (message.type === 'player_left') {
+                if (this.onPlayerLeft) {
+                    this.onPlayerLeft(message.playerId);
+                }
             } else {
                 originalHandleMessage.call(this, message);
             }
