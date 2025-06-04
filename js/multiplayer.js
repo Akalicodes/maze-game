@@ -10,6 +10,7 @@ class MultiplayerManager {
         this.onConnectionSuccess = null;
         this.onRoomCreated = null;
         this.onRoomJoined = null;
+        this.onGameReady = null;
         this.onError = null;
         this.connectionAttempts = 0;
         this.maxConnectionAttempts = 10;
@@ -23,7 +24,11 @@ class MultiplayerManager {
             players: new Set(),
             lastActivity: Date.now(),
             reconnecting: false,
-            lastKnownState: null
+            lastKnownState: null,
+            allPlayersJoined: false,
+            playerCount: 0,
+            canStart: false,
+            requiredPlayers: 3
         };
     }
 
@@ -201,14 +206,17 @@ class MultiplayerManager {
     }
 
     handleMessage(message) {
-        console.log('Received message:', message);
+        console.log('Handling message:', message);
         
         switch (message.type) {
             case 'room_created':
                 this.roomCode = message.roomCode;
                 this.isHost = true;
-                this.role = 'player';
+                this.role = message.role;
                 this.gameState.players.add('host');
+                this.gameState.playerCount = 1;
+                this.gameState.canStart = false;
+                this.gameState.allPlayersJoined = false;
                 if (this.onRoomCreated) {
                     this.onRoomCreated(message.roomCode);
                 }
@@ -216,8 +224,9 @@ class MultiplayerManager {
 
             case 'room_joined':
                 this.roomCode = message.roomCode;
-                this.role = 'guide';
-                this.gameState.players.add('guide');
+                this.role = message.role;
+                this.gameState.canStart = false;
+                this.gameState.allPlayersJoined = false;
                 if (this.onRoomJoined) {
                     this.onRoomJoined();
                 }
@@ -225,16 +234,43 @@ class MultiplayerManager {
 
             case 'player_joined':
                 this.gameState.players.add(message.playerId);
+                this.gameState.playerCount++;
+                
+                // Check if we have all required players
+                if (this.gameState.playerCount === this.gameState.requiredPlayers) {
+                    this.gameState.allPlayersJoined = true;
+                    this.gameState.canStart = true;
+                    if (this.onGameReady) {
+                        this.onGameReady();
+                    }
+                }
+                
                 if (this.onPlayerJoined) {
-                    this.onPlayerJoined(message.playerId);
+                    this.onPlayerJoined(message.playerId, message.role);
                 }
                 break;
 
             case 'player_left':
                 this.gameState.players.delete(message.playerId);
+                this.gameState.playerCount--;
+                this.gameState.canStart = false;
+                this.gameState.allPlayersJoined = false;
                 if (this.onPlayerLeft) {
                     this.onPlayerLeft(message.playerId);
                 }
+                break;
+
+            case 'game_ready':
+                this.gameState.allPlayersJoined = true;
+                this.gameState.canStart = true;
+                if (this.onGameReady) {
+                    this.onGameReady();
+                }
+                break;
+
+            case 'waiting_for_players':
+                this.gameState.allPlayersJoined = false;
+                this.gameState.canStart = false;
                 break;
 
             case 'session_expired':
@@ -295,12 +331,15 @@ class MultiplayerManager {
     sendPosition(position, rotation) {
         if (!this.connected || !this.gameState.active) return;
         
+        const messageType = this.role === 'monster' ? 'monster_position' : 'player_position';
+        
         this.socket.send(JSON.stringify({
-            type: 'player_position',
+            type: messageType,
             position: position,
             rotation: rotation,
             roomCode: this.roomCode,
-            sessionId: this.gameState.sessionId
+            sessionId: this.gameState.sessionId,
+            role: this.role
         }));
     }
 }

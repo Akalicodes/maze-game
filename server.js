@@ -55,6 +55,21 @@ server.on('error', (error) => {
     }
 });
 
+// Add this function near the top with other utility functions
+function getRoomStatus(room) {
+    const playerCount = room.players.size;
+    const roles = Array.from(room.roles.values());
+    return {
+        isFull: playerCount >= 3,  // Only full when 3 or more players
+        isReady: playerCount === 3 && roles.includes('player') && roles.includes('guide') && roles.includes('monster'),
+        currentPlayers: playerCount,
+        hasGuide: roles.includes('guide'),
+        hasMonster: roles.includes('monster'),
+        hasPlayer: roles.includes('player'),
+        availableRoles: roles
+    };
+}
+
 function handleCreateRoom(ws) {
     const roomCode = generateRoomCode();
     const playerId = uuidv4();
@@ -62,17 +77,19 @@ function handleCreateRoom(ws) {
     
     console.log(`Creating new room with code: ${roomCode}, seed: ${mazeSeed}`);
     
-    // Create new room with roles and seed
+    // Create new room with roles and seed - first player is always the regular player
     const room = {
         host: playerId,
         players: new Map([[playerId, ws]]),
         playerPositions: new Map(),
-        roles: new Map([[playerId, 'player']]),
+        roles: new Map([[playerId, 'player']]), // First player is always the regular player
         mazeSeed: mazeSeed,
         mazeData: null,
         createdAt: Date.now(),
         lastActivity: Date.now(),
-        playerActivity: new Map([[playerId, Date.now()]])
+        playerActivity: new Map([[playerId, Date.now()]]),
+        gameStarted: false,
+        sharedMazeInstance: null  // Add this to store the shared maze instance
     };
     
     rooms.set(roomCode, room);
@@ -83,12 +100,13 @@ function handleCreateRoom(ws) {
     ws.role = 'player';
     ws.isAlive = true;
 
-    // Send room created confirmation with seed
+    // Send room created confirmation
     ws.send(JSON.stringify({
         type: 'room_created',
         roomCode: roomCode,
         role: 'player',
-        mazeSeed: mazeSeed
+        mazeSeed: mazeSeed,
+        canStart: false
     }));
 
     console.log(`Room ${roomCode} created by player ${playerId} as player with seed ${mazeSeed}`);
@@ -97,41 +115,66 @@ function handleCreateRoom(ws) {
 
 function handleJoinRoom(ws, roomCode) {
     console.log(`Attempting to join room: ${roomCode}`);
-    console.log(`Available rooms: ${Array.from(rooms.keys()).join(', ')}`);
     
     const room = rooms.get(roomCode);
     if (!room) {
         ws.send(JSON.stringify({
             type: 'error',
-            error: 'Room not found'
+            error: 'Room not found. Please check the room code and try again.'
         }));
         return;
     }
 
-    if (room.players.size >= 2) {
+    const status = getRoomStatus(room);
+    
+    if (status.isFull) {
         ws.send(JSON.stringify({
             type: 'error',
-            error: 'Room is full'
+            error: 'Room is full. Please create a new room or wait for a spot to open.'
         }));
         return;
     }
 
     const playerId = uuidv4();
-    room.players.set(playerId, ws);
-    room.roles.set(playerId, 'guide');
     
+    // Determine role based on what's already taken
+    let role;
+    if (!status.hasGuide) {
+        role = 'guide';
+    } else if (!status.hasMonster) {
+        role = 'monster';
+    } else if (!status.hasPlayer) {
+        role = 'player';
+    } else {
+        ws.send(JSON.stringify({
+            type: 'error',
+            error: 'No roles available. Please try another room.'
+        }));
+        return;
+    }
+
+    console.log(`Assigning role ${role} to player ${playerId} in room ${roomCode}`);
+    
+    // Add player to room
+    room.players.set(playerId, ws);
+    room.roles.set(playerId, role);
+    room.playerActivity.set(playerId, Date.now());
+    
+    // Update WebSocket state
     ws.roomCode = roomCode;
     ws.playerId = playerId;
-    ws.role = 'guide';
+    ws.role = role;
+    ws.isAlive = true;
 
-    // Send join confirmation with role
+    // Send join confirmation
     ws.send(JSON.stringify({
         type: 'room_joined',
         roomCode: roomCode,
-        role: 'guide'
+        role: role,
+        mazeSeed: room.mazeSeed
     }));
 
-    // If maze data exists, send it immediately
+    // If maze data exists, send it
     if (room.mazeData) {
         ws.send(JSON.stringify({
             type: 'maze_data',
@@ -139,44 +182,98 @@ function handleJoinRoom(ws, roomCode) {
         }));
     }
 
-    // Notify host about the new player
-    const hostWs = room.players.get(room.host);
-    if (hostWs) {
-        hostWs.send(JSON.stringify({
-            type: 'player_joined',
-            playerId: playerId,
-            role: 'guide'
-        }));
-    }
+    // Notify all players about the new player
+    room.players.forEach((playerWs, pid) => {
+        if (pid !== playerId) {
+            playerWs.send(JSON.stringify({
+                type: 'player_joined',
+                playerId: playerId,
+                role: role
+            }));
+        }
+    });
 
-    console.log(`Player ${playerId} joined room ${roomCode} as guide`);
+    // Check if room is ready to start
+    const newStatus = getRoomStatus(room);
+    if (newStatus.isReady) {
+        console.log('Room is ready to start game');
+        room.gameStarted = true;
+        room.players.forEach((playerWs) => {
+            playerWs.send(JSON.stringify({
+                type: 'game_ready',
+                message: 'All players have joined. The game can now begin!',
+                canStart: true
+            }));
+        });
+    } else {
+        console.log('Waiting for more players');
+        const remainingPlayers = 3 - room.players.size;
+        const message = `Waiting for ${remainingPlayers} more player${remainingPlayers > 1 ? 's' : ''}...`;
+        room.players.forEach((playerWs) => {
+            playerWs.send(JSON.stringify({
+                type: 'waiting_for_players',
+                message: message,
+                currentPlayers: room.players.size,
+                canStart: false
+            }));
+        });
+    }
 }
 
 function handlePlayerMove(ws, data) {
-    console.log('Received player position:', data);
+    console.log('Received position update:', data);
     const room = rooms.get(ws.roomCode);
     if (!room) {
-        console.log('Room not found for player position:', ws.roomCode);
+        console.log('Room not found for position update:', ws.roomCode);
         return;
     }
 
-    // Update player position
+    // Validate the message type matches the sender's role
+    if ((data.type === 'player_position' && ws.role !== 'player') ||
+        (data.type === 'monster_position' && ws.role !== 'monster')) {
+        console.error('Invalid position update type for role:', data.type, ws.role);
+        return;
+    }
+
+    // Update player/monster position
     room.playerPositions.set(ws.playerId, {
         position: data.position,
-        rotation: data.rotation
+        rotation: data.rotation,
+        role: ws.role
     });
 
-    // Send position to all guide players
+    // Send position to appropriate players based on type
     room.players.forEach((playerWs, playerId) => {
-        if (room.roles.get(playerId) === 'guide') {
-            console.log('Sending position to guide:', {
-                position: data.position,
-                guideId: playerId
-            });
+        const receiverRole = room.roles.get(playerId);
+        
+        // Guide sees all positions
+        if (receiverRole === 'guide') {
             playerWs.send(JSON.stringify({
-                type: 'player_position',
+                type: data.type,
                 position: data.position,
-                rotation: data.rotation
+                rotation: data.rotation,
+                playerId: ws.playerId,
+                role: ws.role
+            }));
+        }
+        // Monster sees player positions
+        else if (receiverRole === 'monster' && data.type === 'player_position') {
+            playerWs.send(JSON.stringify({
+                type: data.type,
+                position: data.position,
+                rotation: data.rotation,
+                playerId: ws.playerId,
+                role: ws.role
+            }));
+        }
+        // Player sees monster positions
+        else if (receiverRole === 'player' && data.type === 'monster_position') {
+            playerWs.send(JSON.stringify({
+                type: data.type,
+                position: data.position,
+                rotation: data.rotation,
+                playerId: ws.playerId,
+                role: ws.role
             }));
         }
     });
@@ -188,25 +285,61 @@ function handleDisconnect(ws) {
     const room = rooms.get(ws.roomCode);
     if (!room) return;
 
-    // Remove player from room
+    console.log(`Player ${ws.playerId} disconnecting from room ${ws.roomCode}`);
+
+    // Remove player from all room data structures
     room.players.delete(ws.playerId);
     room.playerPositions.delete(ws.playerId);
+    room.roles.delete(ws.playerId);
+    room.playerActivity.delete(ws.playerId);
 
-    // Notify other players
+    // If this was the host, assign a new host if possible
+    if (room.host === ws.playerId && room.players.size > 0) {
+        room.host = Array.from(room.players.keys())[0];
+        const newHostWs = room.players.get(room.host);
+        if (newHostWs) {
+            newHostWs.send(JSON.stringify({
+                type: 'host_assigned',
+                message: 'You are now the host'
+            }));
+        }
+    }
+
+    // Get current room status
+    const status = getRoomStatus(room);
+
+    // Notify remaining players
     room.players.forEach((playerWs) => {
         playerWs.send(JSON.stringify({
             type: 'player_left',
-            playerId: ws.playerId
+            playerId: ws.playerId,
+            currentPlayers: status.currentPlayers,
+            availableRoles: status.availableRoles
+        }));
+
+        // Send waiting message since we lost a player
+        playerWs.send(JSON.stringify({
+            type: 'waiting_for_players',
+            message: `A player left. Waiting for ${3 - status.currentPlayers} more player(s)...`,
+            currentPlayers: status.currentPlayers,
+            canStart: false
         }));
     });
 
-    // If room is empty, delete it
-    if (room.players.size === 0) {
+    // Reset game state since we lost a player
+    if (room.gameStarted) {
+        room.gameStarted = false;
+        room.mazeData = null; // Clear maze data to force regeneration
+    }
+
+    // If room is empty or only has disconnected players, delete it
+    if (room.players.size === 0 || Array.from(room.players.values()).every(p => !p.isAlive)) {
+        console.log(`Deleting empty room ${ws.roomCode}`);
         rooms.delete(ws.roomCode);
-        console.log(`Room ${ws.roomCode} deleted`);
     }
 
     console.log(`Player ${ws.playerId} disconnected from room ${ws.roomCode}`);
+    console.log(`Room status: ${status.currentPlayers} players, roles: ${status.availableRoles.join(', ')}`);
 }
 
 function handleMazeData(ws, data) {
@@ -234,17 +367,17 @@ function handleMazeData(ws, data) {
         return;
     }
 
-    // Store maze data in room
+    // Store maze data in room and set as shared instance
     room.mazeData = data.maze;
+    room.sharedMazeInstance = data.maze;
 
-    // Send maze data to all guide players
+    // Send maze data to ALL players, not just guide
     room.players.forEach((playerWs, playerId) => {
-        if (room.roles.get(playerId) === 'guide') {
-            playerWs.send(JSON.stringify({
-                type: 'maze_data',
-                maze: room.mazeData
-            }));
-        }
+        console.log(`Sending maze data to player ${playerId} with role ${room.roles.get(playerId)}`);
+        playerWs.send(JSON.stringify({
+            type: 'maze_data',
+            maze: room.sharedMazeInstance
+        }));
     });
 }
 
@@ -277,6 +410,7 @@ function handleMessage(ws, data) {
                 handlePing(ws);
                 break;
             case 'player_position':
+            case 'monster_position':
                 handlePlayerMove(ws, data);
                 break;
             case 'maze_data':

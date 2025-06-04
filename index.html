@@ -15,11 +15,12 @@
         });
     </script>
     <style>
-        body { 
+        body {
             margin: 0;
             overflow: hidden;
             font-family: Arial, sans-serif;
-            pointer-events: auto !important;
+            background: #000;
+            color: #fff;
         }
         #startScreen {
             position: absolute;
@@ -331,7 +332,7 @@
         }
     </style>
 </head>
-<body class="no-cursor">
+<body>
     <div id="startScreen">
         <h1>3D Maze Game</h1>
         <div class="instruction">Navigate through the maze to find the exit</div>
@@ -376,6 +377,8 @@
             <br>
             Player position is shown as a blue square
             <br>
+            Monster position is shown as a red diamond
+            <br>
             Exit is shown as a green square
         </div>
     </div>
@@ -388,11 +391,40 @@
         let textureLoader;
         let gameMode = 'single';
         let multiplayerManager = null;
-        let otherPlayer = null;
+        let otherPlayers = {};
         let gameStarted = false;
         let playerRole = null;
         let guideCanvas, guideCtx;
         let playerPosition = null;
+        let monsterPosition = null;  // Add this line to store monster position
+        let allPlayersJoined = false;
+        let requiredPlayers = 3;
+        let roomCode = null;
+        let lastPositionUpdate = 0;
+        const POSITION_UPDATE_INTERVAL = 50; // Changed from 100ms to 50ms for more frequent updates
+        let monsterTexture = null;
+
+        function createMonsterMesh() {
+            // Create a plane geometry that always faces the camera
+            const monsterGeometry = new THREE.PlaneGeometry(2, 2);
+            const monsterMaterial = new THREE.MeshBasicMaterial({
+                map: textureLoader.load('monster.png'),
+                transparent: true,
+                side: THREE.DoubleSide
+            });
+            const monster = new THREE.Mesh(monsterGeometry, monsterMaterial);
+            
+            // Create a container for the monster to handle positioning
+            const monsterContainer = new THREE.Object3D();
+            monsterContainer.add(monster);
+            
+            // Make the monster plane always face the camera
+            monster.onBeforeRender = function(renderer, scene, camera) {
+                monster.quaternion.copy(camera.quaternion);
+            };
+            
+            return monsterContainer;
+        }
 
         function createRoom() {
             if (gameStarted) {
@@ -426,32 +458,120 @@
                 
                 // Show instructions
                 const instructionsElement = document.getElementById('roomCodeInstructions');
-                instructionsElement.textContent = 'Share this code with your friend • Click to copy';
+                instructionsElement.textContent = `Share this code with other players • Click to copy • Waiting for ${requiredPlayers - 1} more players...`;
                 instructionsElement.style.display = 'block';
                 
-                // Set the game mode and initialize
+                // Set the game mode but don't start yet
                 gameMode = 'multiplayer';
-                playerRole = 'player'; // Make sure player role is set
-                init(); // Initialize the game
-                gameStarted = true; // Set game as started
-                animate(); // Start the animation loop
+                playerRole = 'player';
+                allPlayersJoined = false;
+                gameStarted = false;
+                
+                // Initialize scene but don't start animation
+                init(false);
             };
 
-            multiplayerManager.onPlayerJoined = (playerId) => {
-                console.log('Player joined:', playerId);
-                // Hide the room code and instructions only if we're the host
-                if (multiplayerManager.isHost) {
-                    document.getElementById('roomCode').style.display = 'none';
-                    document.getElementById('roomCodeInstructions').style.display = 'none';
+            multiplayerManager.onPlayerJoined = (playerId, role) => {
+                console.log('Player joined:', playerId, 'as', role);
+                if (!otherPlayers[playerId] && (playerRole === 'player' || playerRole === 'monster')) {
+                    console.log('Creating representation for player:', playerId, 'with role:', role);
+                    
+                    // Create a more visible representation for players
+                    let playerMesh;
+                    if (role === 'monster') {
+                        // Monster representation
+                        playerMesh = new THREE.Mesh(
+                            new THREE.CylinderGeometry(0.3, 0.3, 2, 8),
+                            new THREE.MeshPhongMaterial({ 
+                                color: 0xff0000,
+                                emissive: 0xff0000,
+                                emissiveIntensity: 0.5
+                            })
+                        );
+                    } else {
+                        // Player representation - more visible for monster
+                        const playerGeometry = new THREE.Group();
+                        
+                        // Main body - taller and brighter cylinder
+                        const body = new THREE.Mesh(
+                            new THREE.CylinderGeometry(0.4, 0.4, 2.5, 8),
+                            new THREE.MeshPhongMaterial({ 
+                                color: 0x00ff00,
+                                emissive: 0x00ff00,
+                                emissiveIntensity: 0.5
+                            })
+                        );
+                        playerGeometry.add(body);
+                        
+                        // Add glowing ring at the top
+                        const ring = new THREE.Mesh(
+                            new THREE.TorusGeometry(0.5, 0.1, 8, 16),
+                            new THREE.MeshPhongMaterial({
+                                color: 0xffff00,
+                                emissive: 0xffff00,
+                                emissiveIntensity: 0.7
+                            })
+                        );
+                        ring.position.y = 1.5;
+                        ring.rotation.x = Math.PI / 2;
+                        playerGeometry.add(ring);
+                        
+                        playerMesh = playerGeometry;
+                    }
+                    
+                    otherPlayers[playerId] = playerMesh;
+                    otherPlayers[playerId].position.set(0, 1, 0);
+                    otherPlayers[playerId].visible = true;
+                    scene.add(otherPlayers[playerId]);
+                    
+                    console.log('Added player representation to scene:', playerId);
                 }
+                
+                // Update waiting message
+                const instructionsElement = document.getElementById('roomCodeInstructions');
+                const currentPlayers = Object.keys(otherPlayers).length + 1;
+                const playersNeeded = requiredPlayers - currentPlayers;
+                
+                if (playersNeeded > 0) {
+                    instructionsElement.textContent = `Share this code with other players • Click to copy • Waiting for ${playersNeeded} more player${playersNeeded > 1 ? 's' : ''}...`;
+                }
+            };
+
+            multiplayerManager.onGameReady = () => {
+                console.log('All players have joined, starting game...');
+                allPlayersJoined = true;
+                gameStarted = true;
+                
+                // Hide the room code and instructions
+                document.getElementById('roomCode').style.display = 'none';
+                document.getElementById('roomCodeInstructions').style.display = 'none';
+                document.getElementById('waitingMessage').style.display = 'none';
+                
+                // Start the game animation
+                animate();
             };
 
             multiplayerManager.onPlayerLeft = (playerId) => {
                 console.log('Player left:', playerId);
-                // If we're the host and the guide left, show the room code again
-                if (multiplayerManager.isHost) {
-                    document.getElementById('roomCode').style.display = 'block';
-                    document.getElementById('roomCodeInstructions').style.display = 'block';
+                if (otherPlayers[playerId]) {
+                    scene.remove(otherPlayers[playerId]);
+                    delete otherPlayers[playerId];
+                }
+                
+                // Update UI to show disconnection and waiting state
+                const currentPlayers = Object.keys(otherPlayers).length + 1;
+                if (currentPlayers < requiredPlayers) {
+                    allPlayersJoined = false;
+                    gameStarted = false;
+                    
+                    // Show waiting message
+                    const instructionsElement = document.getElementById('roomCodeInstructions');
+                    instructionsElement.style.display = 'block';
+                    instructionsElement.textContent = `A player has disconnected • Waiting for ${requiredPlayers - currentPlayers} more player${requiredPlayers - currentPlayers > 1 ? 's' : ''}...`;
+                    
+                    // Show room code again
+                    const roomCodeElement = document.getElementById('roomCode');
+                    roomCodeElement.style.display = 'block';
                 }
             };
 
@@ -560,6 +680,7 @@
             console.log('Initializing game in mode:', gameMode, 'role:', playerRole);
             
             try {
+                // Only guide gets the 2D view
                 if (playerRole === 'guide') {
                     // Initialize guide view
                     document.body.style.cursor = 'default';
@@ -571,11 +692,12 @@
                     }
                     return;
                 }
-                
-                // Initialize 3D view for player
+
+                // Both player and monster get the same 3D setup
                 scene = new THREE.Scene();
                 scene.background = new THREE.Color(0x000000);
                 
+                // Create renderer
                 renderer = new THREE.WebGLRenderer({ 
                     antialias: true,
                     powerPreference: "high-performance"
@@ -584,8 +706,10 @@
                 renderer.setPixelRatio(window.devicePixelRatio);
                 document.body.appendChild(renderer.domElement);
                 
+                // Create first-person camera
                 camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
                 
+                // Load textures
                 textureLoader = new THREE.TextureLoader();
                 
                 // Generate new maze for single player or host
@@ -606,13 +730,52 @@
                 if (!maze) {
                     throw new Error('No maze data available');
                 }
+
+                // Set starting position based on role
+                if (playerRole === 'monster') {
+                    // Place monster at a random position
+                    const randomCell = getRandomEmptyCell(maze);
+                    camera.position.set(
+                        randomCell.x * maze.cellSize,
+                        1.5,
+                        randomCell.z * maze.cellSize
+                    );
+                    console.log('Monster spawned at:', camera.position);
+
+                    // Add monster UI overlay
+                    const monsterInstructions = document.createElement('div');
+                    monsterInstructions.style.cssText = `
+                        position: fixed;
+                        top: 20px;
+                        left: 20px;
+                        color: #ff0000;
+                        font-size: 18px;
+                        text-shadow: 0 0 5px rgba(255, 0, 0, 0.5);
+                        z-index: 1000;
+                    `;
+                    monsterInstructions.innerHTML = `
+                        Monster View - Find and catch the player before they escape!<br>
+                        Use WASD to move and mouse to look around<br>
+                        The player appears as a green cylinder
+                    `;
+                    document.body.appendChild(monsterInstructions);
+                } else {
+                    // Set player starting position
+                    camera.position.set(
+                        maze.startPosition.x,
+                        1.5,
+                        maze.startPosition.z
+                    );
+                    console.log('Player spawned at:', camera.position);
+                }
+
+                // Make sure guide view is hidden for both player and monster
+                const guideView = document.getElementById('guideView');
+                if (guideView) {
+                    guideView.style.display = 'none';
+                }
                 
-                camera.position.set(
-                    maze.startPosition.x,
-                    1.5,
-                    maze.startPosition.z
-                );
-                
+                // Generate maze geometry
                 mazeGroup = new THREE.Group();
                 generateNewMaze();
                 
@@ -621,7 +784,10 @@
                 gameStarted = true;
                 animate();
                 
-                console.log('Game initialized in mode:', gameMode, 'role:', playerRole);
+                // Request pointer lock for both player and monster
+                renderer.domElement.requestPointerLock();
+                
+                console.log('Game initialized in mode:', gameMode, 'role:', playerRole, 'with first-person view');
             } catch (error) {
                 console.error('Error initializing game:', error);
                 document.body.innerHTML = '<div style="color: red; text-align: center; margin-top: 50px;">Error: Failed to initialize game. Please try refreshing the page.</div>';
@@ -637,12 +803,11 @@
                 mazeGroup = new THREE.Group();
             }
 
-            // Only generate new maze if we're in single player mode
-            if (gameMode === 'single') {
-                const generator = new MazeGenerator(MAZE_SIZE.width, MAZE_SIZE.height);
-                maze = generator.generate();
+            // Initialize maze.wallPositions array
+            if (!maze.wallPositions) {
+                maze.wallPositions = [];
             }
-            
+
             mazeGroup = new THREE.Group();
             
             // Add static lights in a sparser grid pattern
@@ -687,7 +852,7 @@
             const wallGeometry = new THREE.BoxGeometry(maze.cellSize, maze.wallHeight, maze.cellSize);
             const wallMaterial = new THREE.MeshPhongMaterial({
                 map: wallTexture,
-                color: 0xcccccc,  // Lighter wall color
+                color: 0xcccccc,
                 specular: 0x222222,
                 shininess: 10,
                 transparent: false,
@@ -697,6 +862,7 @@
                 depthTest: true
             });
 
+            // Clear existing walls array
             maze.wallPositions = [];
 
             function addWall(x, z) {
@@ -792,55 +958,55 @@
         }
 
         function checkCollision(position) {
-            const playerRadius = 0.4;
-            const wallBuffer = 0.5; // Increased buffer for better wall stopping
-            const minDistance = playerRadius + maze.cellSize / 2 + wallBuffer;
-            let nearestWall = null;
-            let nearestDistance = Infinity;
+            if (!maze || !maze.wallPositions || !Array.isArray(maze.wallPositions)) {
+                console.log('Maze or wall positions not properly initialized');
+                return { x: false, z: false };
+            }
+
+            const playerRadius = 0.4; // Collision radius for the player
+            const wallBuffer = 0.2; // Increased buffer zone to prevent glitching
+            let collisionX = false;
+            let collisionZ = false;
             
-            // Find the nearest wall
             for (const wall of maze.wallPositions) {
                 const dx = position.x - wall.x;
                 const dz = position.z - wall.z;
                 const distance = Math.sqrt(dx * dx + dz * dz);
                 
-                if (distance < minDistance && distance < nearestDistance) {
-                    nearestWall = wall;
-                    nearestDistance = distance;
+                // If we're close enough to collide
+                if (distance < maze.cellSize / 2 + playerRadius + wallBuffer) {
+                    // Calculate the angle of approach
+                    const approachAngle = Math.atan2(Math.abs(dz), Math.abs(dx));
+                    
+                    // Determine collision based on approach angle with wider detection zones
+                    if (approachAngle < Math.PI / 3) { // 60 degree zone for X collision
+                        collisionX = true;
+                    }
+                    if (approachAngle > Math.PI / 6) { // 30 degree zone for Z collision
+                        collisionZ = true;
+                    }
+                    
+                    // If we're very close, block both axes to prevent corner glitches
+                    if (distance < (maze.cellSize / 2 + playerRadius) * 0.7) {
+                        collisionX = true;
+                        collisionZ = true;
+                    }
                 }
             }
             
-            if (nearestWall) {
-                // Calculate wall normal
-                const dx = position.x - nearestWall.x;
-                const dz = position.z - nearestWall.z;
-                const distance = Math.sqrt(dx * dx + dz * dz);
-                const wallNormal = new THREE.Vector2(dx / distance, dz / distance);
-                
-                // Calculate push back position with extra safety margin
-                const pushDistance = (minDistance - distance) * 1.1; // Add 10% extra push
-                const slidePosition = {
-                    x: position.x + wallNormal.x * pushDistance,
-                    y: 1.5,
-                    z: position.z + wallNormal.y * pushDistance
-                };
-                
-                return {
-                    collision: true,
-                    slidePosition: slidePosition,
-                    wallNormal: wallNormal,
-                    distance: distance
-                };
-            }
-            
-            return { collision: false };
+            return { x: collisionX, z: collisionZ };
         }
 
         function setupControls() {
-            const moveSpeed = 0.15;
-            const turnSpeed = 0.06;
+            const moveSpeed = playerRole === 'monster' ? 0.1 : 0.15; // Slow down monster
+            const turnSpeed = 0.06;  // Added for camera panning
             let lastTime = performance.now();
             let isPointerLocked = false;
+            
+            const controls = {
+                enabled: true,
+                update: null
+            };
             
             const keys = {
                 forward: false,
@@ -855,20 +1021,14 @@
 
             // Mouse movement handler
             function onMouseMove(event) {
-                if (isPointerLocked && gameStarted && playerRole === 'player') {
+                if (isPointerLocked && gameStarted && (playerRole === 'player' || playerRole === 'monster')) {
                     camera.rotation.y -= event.movementX * 0.002;
-                    document.body.style.cursor = 'none';
                 }
             }
 
             // Pointer lock change handler
             function onPointerLockChange() {
                 isPointerLocked = document.pointerLockElement === renderer.domElement;
-                if (isPointerLocked) {
-                    document.body.style.cursor = 'none';
-                } else {
-                    document.body.style.cursor = 'default';
-                }
             }
 
             // Pointer lock error handler
@@ -884,9 +1044,7 @@
             // Handle click to start pointer lock
             if (renderer && renderer.domElement) {
                 renderer.domElement.addEventListener('click', () => {
-                    if (!isPointerLocked && gameStarted && playerRole === 'player') {
-                        renderer.domElement.requestPointerLock();
-                    }
+                    // Remove pointer lock request
                 });
             }
 
@@ -898,7 +1056,6 @@
             });
 
             keydownListener = (e) => {
-                console.log('Key pressed:', e.key.toLowerCase());
                 switch(e.key.toLowerCase()) {
                     case 'w':
                     case 'arrowup':
@@ -944,94 +1101,71 @@
             document.addEventListener('keydown', keydownListener);
             document.addEventListener('keyup', keyupListener);
 
-            return function updateControls() {
-                const currentTime = performance.now();
-                const deltaTime = Math.min((currentTime - lastTime) / 16.67, 2.0);
-                lastTime = currentTime;
+            controls.update = function updateControls() {
+                if (!controls.enabled || !camera || !maze) return;
 
-                // Apply rotation
-                if (keys.left) camera.rotation.y += turnSpeed * deltaTime;
-                if (keys.right) camera.rotation.y -= turnSpeed * deltaTime;
+                const moveSpeed = playerRole === 'monster' ? 0.1 : 0.15; // Slow down monster
+                const turnSpeed = 0.06;  // Added for camera panning
+                const newPosition = camera.position.clone();
+                const oldPosition = camera.position.clone();
 
-                // Calculate movement
-                if (keys.forward || keys.backward) {
-                    const direction = new THREE.Vector3();
-                    camera.getWorldDirection(direction);
-                    direction.y = 0; // Keep movement horizontal
-                    direction.normalize();
+                // Calculate movement vector
+                let moveVector = new THREE.Vector3(0, 0, 0);
+                if (keys.forward) {
+                    moveVector.x -= Math.sin(camera.rotation.y) * moveSpeed;
+                    moveVector.z -= Math.cos(camera.rotation.y) * moveSpeed;
+                }
+                if (keys.backward) {
+                    moveVector.x += Math.sin(camera.rotation.y) * moveSpeed;
+                    moveVector.z += Math.cos(camera.rotation.y) * moveSpeed;
+                }
+                if (keys.left) {
+                    camera.rotation.y += turnSpeed;
+                }
+                if (keys.right) {
+                    camera.rotation.y -= turnSpeed;
+                }
+
+                // Check collisions by testing each axis separately with a small step
+                const stepSize = 0.1;
+                const steps = Math.ceil(Math.max(Math.abs(moveVector.x), Math.abs(moveVector.z)) / stepSize);
+                
+                if (steps > 0) {
+                    const stepX = moveVector.x / steps;
+                    const stepZ = moveVector.z / steps;
                     
-                    if (keys.backward) {
-                        direction.multiplyScalar(-1);
-                    }
-                    
-                    // Test position before moving
-                    const moveAmount = moveSpeed * deltaTime;
-                    const testPosition = camera.position.clone().add(direction.multiplyScalar(moveAmount));
-                    
-                    // Check collision at test position
-                    const collisionResult = checkCollision(testPosition);
-                    
-                    if (!collisionResult.collision) {
-                        // No collision, safe to move
-                        camera.position.copy(testPosition);
-                        console.log('Player moved to:', {
-                            x: camera.position.x,
-                            y: camera.position.y,
-                            z: camera.position.z
-                        });
-                    } else {
-                        // We hit a wall - first try to slide
-                        const wallNormal = collisionResult.wallNormal;
+                    for (let i = 0; i < steps; i++) {
+                        const nextPos = newPosition.clone();
+                        nextPos.x += stepX;
+                        nextPos.z += stepZ;
                         
-                        // Project movement direction onto wall plane
-                        const dot = direction.x * wallNormal.x + direction.z * wallNormal.y;
-                        const slideDirection = new THREE.Vector2(
-                            direction.x - wallNormal.x * dot,
-                            direction.z - wallNormal.y * dot
-                        ).normalize();
+                        const collision = checkCollision(nextPos);
                         
-                        // Only try to slide if we're not hitting the wall head-on
-                        if (Math.abs(dot) < 0.95) {
-                            const slidePosition = new THREE.Vector3(
-                                collisionResult.slidePosition.x + slideDirection.x * moveAmount * 0.5,
-                                1.5,
-                                collisionResult.slidePosition.z + slideDirection.y * moveAmount * 0.5
-                            );
-                            
-                            // Verify slide position is safe
-                            const slideCollision = checkCollision(slidePosition);
-                            if (!slideCollision.collision) {
-                                camera.position.copy(slidePosition);
-                            } else {
-                                // Can't slide, stay at safe push-back position
-                                camera.position.copy(collisionResult.slidePosition);
-                            }
-                        } else {
-                            // Head-on collision, just stop at the push-back position
-                            camera.position.copy(collisionResult.slidePosition);
+                        if (!collision.x) {
+                            newPosition.x += stepX;
+                        }
+                        if (!collision.z) {
+                            newPosition.z += stepZ;
+                        }
+                        
+                        // If we hit a wall, stop checking further steps
+                        if (collision.x && collision.z) {
+                            break;
                         }
                     }
                 }
+
+                // Update position and send update if changed
+                camera.position.copy(newPosition);
                 
-                // Final safety check - if somehow we're in a wall, push out
-                const finalCollision = checkCollision(camera.position);
-                if (finalCollision.collision) {
-                    camera.position.copy(finalCollision.slidePosition);
-                }
-                
-                // Maintain camera height
-                camera.position.y = 1.5;
-                
-                // Check if reached end
-                const distanceToEnd = new THREE.Vector2(
-                    camera.position.x - maze.endPosition.x,
-                    camera.position.z - maze.endPosition.z
-                ).length();
-                
-                if (distanceToEnd < 1) {
-                    showWinScreen();
+                if (camera.position.x !== oldPosition.x || camera.position.z !== oldPosition.z) {
+                    if (multiplayerManager && multiplayerManager.connected) {
+                        multiplayerManager.sendPosition(camera.position, camera.rotation);
+                    }
                 }
             };
+
+            return controls;
         }
 
         function showWinScreen() {
@@ -1093,12 +1227,22 @@
                 document.getElementById('multiplayerMenu').style.display = 'none';
                 document.getElementById('roomCodeInput').style.display = 'none';
                 
-                // Set the game mode and role
+                // Set the game mode
                 gameMode = 'multiplayer';
-                playerRole = 'guide';
                 
-                // Initialize guide view when maze data is received
-                // The actual initialization will happen in the maze_data message handler
+                // Initialize view based on role - this was the bug, we were always initializing guide view
+                if (playerRole === 'guide') {
+                    // Wait for maze data before initializing guide view
+                    console.log('Guide role assigned, waiting for maze data');
+                } else if (playerRole === 'monster') {
+                    // Monster should get 3D view
+                    console.log('Monster role assigned, will initialize 3D view when maze data arrives');
+                    document.getElementById('guideView').style.display = 'none';
+                } else {
+                    // Player should get 3D view
+                    console.log('Player role assigned, will initialize 3D view when maze data arrives');
+                    document.getElementById('guideView').style.display = 'none';
+                }
             };
 
             multiplayerManager.onError = (error) => {
@@ -1122,39 +1266,130 @@
         }
 
         function setupMultiplayer() {
-            console.log('Setting up multiplayer components...');
+            console.log('Setting up multiplayer components with role:', playerRole);
             
-            // Create other player representation
-            const otherPlayerGeometry = new THREE.CylinderGeometry(0.3, 0.3, 2, 8);
-            const otherPlayerMaterial = new THREE.MeshPhongMaterial({ color: 0xff0000 });
-            otherPlayer = new THREE.Mesh(otherPlayerGeometry, otherPlayerMaterial);
-            otherPlayer.position.set(0, 1, 0);
-            otherPlayer.visible = false; // Hide initially
-            scene.add(otherPlayer);
-
-            console.log('Other player mesh added to scene');
+            // Create other player representation based on role
+            if (playerRole === 'player' || playerRole === 'monster') {
+                let otherPlayerMesh;
+                if (playerRole === 'monster') {
+                    // Create player representation for monster's view
+                    const playerGeometry = new THREE.Group();
+                    
+                    // Main body - taller and brighter cylinder
+                    const body = new THREE.Mesh(
+                        new THREE.CylinderGeometry(0.4, 0.4, 2.5, 8),
+                        new THREE.MeshPhongMaterial({ 
+                            color: 0x00ff00,
+                            emissive: 0x00ff00,
+                            emissiveIntensity: 0.5
+                        })
+                    );
+                    playerGeometry.add(body);
+                    
+                    // Add glowing ring at the top
+                    const ring = new THREE.Mesh(
+                        new THREE.TorusGeometry(0.5, 0.1, 8, 16),
+                        new THREE.MeshPhongMaterial({
+                            color: 0xffff00,
+                            emissive: 0xffff00,
+                            emissiveIntensity: 0.7
+                        })
+                    );
+                    ring.position.y = 1.5;
+                    ring.rotation.x = Math.PI / 2;
+                    playerGeometry.add(ring);
+                    
+                    otherPlayerMesh = playerGeometry;
+                } else {
+                    // Monster representation for player's view
+                    otherPlayerMesh = new THREE.Mesh(
+                        new THREE.CylinderGeometry(0.3, 0.3, 2, 8),
+                        new THREE.MeshPhongMaterial({ 
+                            color: 0xff0000,
+                            emissive: 0xff0000,
+                            emissiveIntensity: 0.5
+                        })
+                    );
+                }
+                
+                otherPlayers[multiplayerManager.playerId] = otherPlayerMesh;
+                otherPlayers[multiplayerManager.playerId].position.set(0, 1, 0);
+                otherPlayers[multiplayerManager.playerId].visible = true;
+                scene.add(otherPlayers[multiplayerManager.playerId]);
+            }
 
             // Set up multiplayer event handlers
-            multiplayerManager.onPlayerJoined = (playerId) => {
-                console.log('Player joined:', playerId);
-                if (otherPlayer) {
-                    otherPlayer.visible = true;
+            multiplayerManager.onPlayerJoined = (playerId, role) => {
+                console.log('Player joined:', playerId, 'as', role);
+                if (!otherPlayers[playerId] && (playerRole === 'player' || playerRole === 'monster')) {
+                    console.log('Creating representation for player:', playerId, 'with role:', role);
+                    
+                    // Create a more visible representation for players
+                    let playerMesh;
+                    if (role === 'monster') {
+                        // Monster representation
+                        playerMesh = new THREE.Mesh(
+                            new THREE.CylinderGeometry(0.3, 0.3, 2, 8),
+                            new THREE.MeshPhongMaterial({ 
+                                color: 0xff0000,
+                                emissive: 0xff0000,
+                                emissiveIntensity: 0.5
+                            })
+                        );
+                    } else {
+                        // Player representation - more visible for monster
+                        const playerGeometry = new THREE.Group();
+                        
+                        // Main body - taller and brighter cylinder
+                        const body = new THREE.Mesh(
+                            new THREE.CylinderGeometry(0.4, 0.4, 2.5, 8),
+                            new THREE.MeshPhongMaterial({ 
+                                color: 0x00ff00,
+                                emissive: 0x00ff00,
+                                emissiveIntensity: 0.5
+                            })
+                        );
+                        playerGeometry.add(body);
+                        
+                        // Add glowing ring at the top
+                        const ring = new THREE.Mesh(
+                            new THREE.TorusGeometry(0.5, 0.1, 8, 16),
+                            new THREE.MeshPhongMaterial({
+                                color: 0xffff00,
+                                emissive: 0xffff00,
+                                emissiveIntensity: 0.7
+                            })
+                        );
+                        ring.position.y = 1.5;
+                        ring.rotation.x = Math.PI / 2;
+                        playerGeometry.add(ring);
+                        
+                        playerMesh = playerGeometry;
+                    }
+                    
+                    otherPlayers[playerId] = playerMesh;
+                    otherPlayers[playerId].position.set(0, 1, 0);
+                    otherPlayers[playerId].visible = true;
+                    scene.add(otherPlayers[playerId]);
+                    
+                    console.log('Added player representation to scene:', playerId);
                 }
             };
 
             multiplayerManager.onPlayerLeft = (playerId) => {
                 console.log('Player left:', playerId);
-                if (otherPlayer) {
-                    otherPlayer.visible = false;
+                if (otherPlayers[playerId]) {
+                    scene.remove(otherPlayers[playerId]);
+                    delete otherPlayers[playerId];
                 }
             };
 
             multiplayerManager.onPlayerMove = (playerId, position, rotation) => {
                 console.log('Received player move:', playerId, position, rotation);
-                if (otherPlayer) {
-                    otherPlayer.visible = true;
-                    otherPlayer.position.set(position.x, position.y, position.z);
-                    otherPlayer.rotation.set(rotation.x, rotation.y, rotation.z);
+                if (otherPlayers[playerId]) {
+                    otherPlayers[playerId].visible = true;
+                    otherPlayers[playerId].position.set(position.x, position.y, position.z);
+                    otherPlayers[playerId].rotation.set(rotation.x, rotation.y, rotation.z);
                 }
             };
         }
@@ -1228,7 +1463,7 @@
                 };
 
                 // Initial draw
-                drawGuideView(mazeData, null);
+                drawGuideView(mazeData, null, null);
                 gameStarted = true;
 
             } catch (error) {
@@ -1240,7 +1475,12 @@
             }
         }
 
-        function drawGuideView(mazeData, playerPos) {
+        function drawGuideView(mazeData, playerPos, monsterPos) {
+            console.log('Drawing guide view with:', {
+                playerPos: playerPos,
+                monsterPos: monsterPos
+            });
+            
             const config = window.guideViewConfig;
             if (!config || !mazeData?.maze) return;
 
@@ -1326,12 +1566,89 @@
                     squareSize
                 );
 
-                // Draw direction indicator (arrow)
+                // Draw direction indicator (arrow) with improved stability
                 if (playerPos.rotation?.y != null) {
                     const arrowLength = squareSize * 0.8;
                     
                     // Calculate arrow endpoint using player's rotation - adjust for flipped x-axis
-                    const angle = -playerPos.rotation.y - Math.PI / 2;
+                    // Round the rotation value to reduce jitter
+                    const roundedRotation = Math.round(playerPos.rotation.y * 100) / 100;
+                    const angle = -roundedRotation - Math.PI / 2;
+                    
+                    // Calculate endpoints with rounded values
+                    const endX = Math.round(canvasX - Math.cos(angle) * arrowLength);
+                    const endZ = Math.round(canvasZ - Math.sin(angle) * arrowLength);
+                    
+                    // Draw arrow with thicker lines and anti-aliasing
+                    guideCtx.lineCap = 'round';
+                    guideCtx.lineJoin = 'round';
+                    
+                    // Draw arrow line
+                    guideCtx.beginPath();
+                    guideCtx.moveTo(canvasX, canvasZ);
+                    guideCtx.lineTo(endX, endZ);
+                    guideCtx.strokeStyle = '#FFEB3B';
+                    guideCtx.lineWidth = 4;
+                    guideCtx.stroke();
+                    
+                    // Draw arrow head
+                    const headLength = squareSize * 0.4;
+                    const headAngle = Math.PI / 6;
+                    
+                    // Calculate and round head points
+                    const head1X = Math.round(endX + headLength * Math.cos(angle - headAngle));
+                    const head1Z = Math.round(endZ + headLength * Math.sin(angle - headAngle));
+                    const head2X = Math.round(endX + headLength * Math.cos(angle + headAngle));
+                    const head2Z = Math.round(endZ + headLength * Math.sin(angle + headAngle));
+                    
+                    guideCtx.beginPath();
+                    guideCtx.moveTo(endX, endZ);
+                    guideCtx.lineTo(head1X, head1Z);
+                    guideCtx.moveTo(endX, endZ);
+                    guideCtx.lineTo(head2X, head2Z);
+                    guideCtx.strokeStyle = '#FFEB3B';
+                    guideCtx.lineWidth = 4;
+                    guideCtx.stroke();
+                }
+            }
+
+            // Draw monster position if available
+            if (monsterPos?.x != null && monsterPos?.z != null) {
+                console.log('Drawing monster at:', monsterPos);
+                // Convert world position to grid position (snapped to cells)
+                const gridX = Math.round((mazeData.maze[0].length - 1 - monsterPos.x / worldCellSize));
+                const gridZ = Math.round((mazeData.maze.length - 1 - monsterPos.z / worldCellSize));
+                
+                // Convert grid position back to canvas coordinates
+                const canvasX = gridX * cellSize + margin + (cellSize / 2);
+                const canvasZ = gridZ * cellSize + margin + (cellSize / 2);
+
+                // Draw red glow effect for monster
+                guideCtx.shadowColor = '#ff0000';
+                guideCtx.shadowBlur = 15;
+                
+                // Draw monster marker as a red diamond
+                const diamondSize = cellSize * 0.9;
+                guideCtx.fillStyle = '#ff0000';
+                guideCtx.beginPath();
+                guideCtx.moveTo(canvasX, canvasZ - diamondSize/2); // Top point
+                guideCtx.lineTo(canvasX + diamondSize/2, canvasZ); // Right point
+                guideCtx.lineTo(canvasX, canvasZ + diamondSize/2); // Bottom point
+                guideCtx.lineTo(canvasX - diamondSize/2, canvasZ); // Left point
+                guideCtx.closePath();
+                guideCtx.fill();
+                
+                // Add white border to monster marker
+                guideCtx.strokeStyle = '#FFFFFF';
+                guideCtx.lineWidth = 2;
+                guideCtx.stroke();
+
+                // Draw direction indicator for monster if rotation available
+                if (monsterPos.rotation?.y != null) {
+                    const arrowLength = diamondSize * 0.8;
+                    
+                    // Calculate arrow endpoint using monster's rotation
+                    const angle = -monsterPos.rotation.y - Math.PI / 2;
                     const endX = canvasX - Math.cos(angle) * arrowLength;
                     const endZ = canvasZ - Math.sin(angle) * arrowLength;
                     
@@ -1339,12 +1656,12 @@
                     guideCtx.beginPath();
                     guideCtx.moveTo(canvasX, canvasZ);
                     guideCtx.lineTo(endX, endZ);
-                    guideCtx.strokeStyle = '#FFEB3B'; // Yellow color for visibility
+                    guideCtx.strokeStyle = '#ff6b6b'; // Light red color for visibility
                     guideCtx.lineWidth = 3;
                     guideCtx.stroke();
                     
                     // Draw arrow head
-                    const headLength = squareSize * 0.4;
+                    const headLength = diamondSize * 0.4;
                     const headAngle = Math.PI / 6; // 30 degrees
                     
                     guideCtx.beginPath();
@@ -1358,43 +1675,50 @@
                         endX + headLength * Math.cos(angle + headAngle),
                         endZ + headLength * Math.sin(angle + headAngle)
                     );
-                    guideCtx.strokeStyle = '#FFEB3B';
+                    guideCtx.strokeStyle = '#ff6b6b';
                     guideCtx.lineWidth = 3;
                     guideCtx.stroke();
                 }
-
-                // Reset shadow
-                guideCtx.shadowBlur = 0;
             }
+
+            // Reset shadow
+            guideCtx.shadowBlur = 0;
         }
 
         function animate() {
             requestAnimationFrame(animate);
             
-            if (gameStarted && controls) {
-                controls(); // Call the controls update function
+            if (gameStarted && controls && controls.update) {
+                controls.update(); // Call the controls update function
                 
-                if (playerRole === 'player' && multiplayerManager && multiplayerManager.connected) {
-                    // Send position update to server
-                    const position = {
-                        x: camera.position.x,
-                        y: camera.position.y,
-                        z: camera.position.z
-                    };
-                    const rotation = {
-                        x: camera.rotation.x,
-                        y: camera.rotation.y,
-                        z: camera.rotation.z
-                    };
-                    
-                    // Send position and rotation update to server
-                    if (multiplayerManager.socket && multiplayerManager.socket.readyState === WebSocket.OPEN) {
-                        multiplayerManager.socket.send(JSON.stringify({
-                            type: 'player_position',
-                            position: position,
-                            rotation: rotation,
-                            roomCode: multiplayerManager.roomCode
-                        }));
+                if ((playerRole === 'player' || playerRole === 'monster') && multiplayerManager && multiplayerManager.connected) {
+                    const now = Date.now();
+                    // Only send position updates at most every 50ms
+                    if (now - lastPositionUpdate >= POSITION_UPDATE_INTERVAL) {
+                        lastPositionUpdate = now;
+                        
+                        // Send position update to server
+                        const position = {
+                            x: camera.position.x,
+                            y: camera.position.y,
+                            z: camera.position.z
+                        };
+                        const rotation = {
+                            x: camera.rotation.x,
+                            y: camera.rotation.y,
+                            z: camera.rotation.z
+                        };
+                        
+                        // Send position and rotation update to server with correct type
+                        if (multiplayerManager.socket && multiplayerManager.socket.readyState === WebSocket.OPEN) {
+                            multiplayerManager.socket.send(JSON.stringify({
+                                type: playerRole === 'monster' ? 'monster_position' : 'player_position',
+                                position: position,
+                                rotation: rotation,
+                                roomCode: multiplayerManager.roomCode,
+                                sessionId: multiplayerManager.gameState.sessionId
+                            }));
+                        }
                     }
                 }
             }
@@ -1546,85 +1870,339 @@
         // Modify MultiplayerManager message handling
         const originalHandleMessage = MultiplayerManager.prototype.handleMessage;
         MultiplayerManager.prototype.handleMessage = function(message) {
-            console.log('Handling message:', message);
+            console.log('MultiplayerManager received message:', message);
             
-            if (message.type === 'maze_data') {
-                console.log('Received maze data:', message.maze);
-                if (!message.maze) {
-                    console.error('Invalid maze data received');
-                    return;
-                }
-                maze = message.maze;
-                if (playerRole === 'guide') {
-                    console.log('Guide received maze data, initializing view');
-                    // Remove loading message if it exists
-                    const loadingMessage = document.getElementById('guideLoadingMessage');
-                    if (loadingMessage) {
-                        loadingMessage.remove();
+            switch (message.type) {
+                case 'room_created':
+                    console.log('Room created with role:', message.role);
+                    playerRole = message.role;
+                    this.roomCode = message.roomCode;
+                    this.isHost = true;
+                    if (this.onRoomCreated) {
+                        this.onRoomCreated(message.roomCode);
                     }
-                    // Show guide view
-                    document.getElementById('guideView').style.display = 'block';
-                    initGuideView(maze);
-                } else {
-                    generateNewMaze();
-                }
-            } else if (message.type === 'player_position' && playerRole === 'guide') {
-                console.log('Guide received player position:', message.position);
-                if (!message.position || typeof message.position.x !== 'number' || typeof message.position.z !== 'number') {
-                    console.error('Invalid player position received:', message.position);
-                    return;
-                }
-                
-                // Update player position and redraw immediately
-                playerPosition = {
-                    x: message.position.x,
-                    y: message.position.y,
-                    z: message.position.z,
-                    rotation: message.rotation
-                };
-                
-                if (maze && guideCanvas && guideCtx) {
-                    console.log('Drawing guide view with player position:', playerPosition);
-                    drawGuideView(maze, playerPosition);
-                } else {
-                    console.error('Missing required objects for guide view:', {
-                        hasMaze: !!maze,
-                        hasCanvas: !!guideCanvas,
-                        hasContext: !!guideCtx
-                    });
-                }
-            } else if (message.type === 'room_created') {
-                playerRole = message.role;
-                this.roomCode = message.roomCode;
-                this.isHost = true;
-                if (this.onRoomCreated) {
-                    this.onRoomCreated(message.roomCode);
-                }
-            } else if (message.type === 'room_joined') {
-                console.log('Room joined message:', message);
-                playerRole = message.role;
-                this.roomCode = message.roomCode;
-                
-                if (this.onRoomJoined) {
-                    this.onRoomJoined();
-                }
-            } else if (message.type === 'error') {
-                console.error('Server error:', message.error);
-                if (this.onError) {
-                    this.onError(message.error);
-                }
-            } else if (message.type === 'player_joined') {
-                if (this.onPlayerJoined) {
-                    this.onPlayerJoined(message.playerId, message.role);
-                }
-            } else if (message.type === 'player_left') {
-                if (this.onPlayerLeft) {
-                    this.onPlayerLeft(message.playerId);
-                }
-            } else {
-                originalHandleMessage.call(this, message);
+                    break;
+
+                case 'room_joined':
+                    console.log('Room joined with role:', message.role);
+                    playerRole = message.role;
+                    this.roomCode = message.roomCode;
+                    
+                    if (this.onRoomJoined) {
+                        this.onRoomJoined();
+                    }
+                    break;
+
+                case 'game_ready':
+                    console.log('Game ready received, all players joined');
+                    // Hide room code and waiting messages
+                    document.getElementById('roomCode').style.display = 'none';
+                    document.getElementById('roomCodeInstructions').style.display = 'none';
+                    document.getElementById('multiplayerMenu').style.display = 'none';
+                    
+                    // Start the game if not already started
+                    if (!gameStarted) {
+                        gameStarted = true;
+                        console.log('Starting game with role:', playerRole);
+                        init();
+                        animate();
+                    }
+                    break;
+
+                case 'player_position':
+                    if (playerRole === 'guide') {
+                        console.log('Guide received player position:', message);
+                        if (!message.position || typeof message.position.x !== 'number' || typeof message.position.z !== 'number') {
+                            console.error('Invalid player position received:', message.position);
+                            return;
+                        }
+                        
+                        playerPosition = {
+                            x: message.position.x,
+                            y: message.position.y,
+                            z: message.position.z,
+                            rotation: message.rotation
+                        };
+                        
+                        if (maze && guideCanvas && guideCtx) {
+                            console.log('Drawing guide view with updated positions');
+                            drawGuideView(maze, playerPosition, monsterPosition);
+                        }
+                    } else if (playerRole === 'monster' && message.playerId) {
+                        // Monster sees player position
+                        console.log('Monster received player position:', message);
+                        if (otherPlayers[message.playerId]) {
+                            otherPlayers[message.playerId].position.set(
+                                message.position.x,
+                                message.position.y,
+                                message.position.z
+                            );
+                            if (message.rotation) {
+                                otherPlayers[message.playerId].rotation.set(
+                                    message.rotation.x,
+                                    message.rotation.y,
+                                    message.rotation.z
+                                );
+                            }
+                        }
+                    }
+                    break;
+
+                case 'monster_position':
+                    if (playerRole === 'guide') {
+                        console.log('Guide received monster position:', message);
+                        if (!message.position || typeof message.position.x !== 'number' || typeof message.position.z !== 'number') {
+                            console.error('Invalid monster position received:', message.position);
+                            return;
+                        }
+                        
+                        monsterPosition = {
+                            x: message.position.x,
+                            y: message.position.y,
+                            z: message.position.z,
+                            rotation: message.rotation
+                        };
+                        
+                        if (maze && guideCanvas && guideCtx) {
+                            console.log('Drawing guide view with monster at:', {
+                                x: monsterPosition.x,
+                                z: monsterPosition.z
+                            });
+                            drawGuideView(maze, playerPosition, monsterPosition);
+                        }
+                    } else if (playerRole === 'player' && message.playerId) {
+                        // Player sees monster position
+                        console.log('Player received monster position:', message);
+                        if (otherPlayers[message.playerId]) {
+                            otherPlayers[message.playerId].position.set(
+                                message.position.x,
+                                message.position.y,
+                                message.position.z
+                            );
+                            if (message.rotation) {
+                                otherPlayers[message.playerId].rotation.set(
+                                    message.rotation.x,
+                                    message.rotation.y,
+                                    message.rotation.z
+                                );
+                            }
+                        }
+                    }
+                    break;
+
+                case 'maze_data':
+                    console.log('Received maze data:', message.maze);
+                    maze = message.maze;
+                    maze.wallPositions = maze.wallPositions || [];
+                    
+                    // Initialize the maze for all roles
+                    if (playerRole === 'player' || playerRole === 'monster') {
+                        generateNewMaze();
+                    } else if (playerRole === 'guide') {
+                        drawGuideView(maze);
+                    }
+                    break;
+
+                case 'waiting_for_players':
+                    console.log('Waiting for players:', message);
+                    const instructionsElement = document.getElementById('roomCodeInstructions');
+                    if (instructionsElement) {
+                        instructionsElement.textContent = message.message || 'Waiting for more players...';
+                        instructionsElement.style.display = 'block';
+                    }
+                    break;
+
+                case 'host_assigned':
+                    console.log('Host assigned:', message);
+                    if (message.isHost) {
+                        this.isHost = true;
+                    }
+                    break;
+
+                case 'error':
+                    console.error('Server error:', message.error);
+                    if (this.onError) {
+                        this.onError(message.error);
+                    }
+                    break;
+
+                case 'player_joined':
+                    if (this.onPlayerJoined) {
+                        this.onPlayerJoined(message.playerId, message.role);
+                    }
+                    break;
+
+                case 'player_left':
+                    if (this.onPlayerLeft) {
+                        this.onPlayerLeft(message.playerId);
+                    }
+                    break;
+
+                default:
+                    console.log('Unhandled message type:', message.type);
+                    break;
             }
         };
+
+        function handleMultiplayerMessage(message) {
+            console.log('Handling message:', message);
+            
+            switch (message.type) {
+                case 'room_created':
+                    roomCode = message.roomCode;
+                    playerRole = message.role;
+                    document.getElementById('roomCode').textContent = roomCode;
+                    document.getElementById('waitingMessage').style.display = 'block';
+                    document.getElementById('waitingMessage').textContent = 'Waiting for other players to join...';
+                    break;
+                    
+                case 'room_joined':
+                    roomCode = message.roomCode;
+                    playerRole = message.role;
+                    document.getElementById('roomCode').textContent = roomCode;
+                    document.getElementById('waitingMessage').style.display = 'block';
+                    document.getElementById('waitingMessage').textContent = 'Waiting for other players...';
+                    break;
+                    
+                case 'waiting_for_players':
+                    document.getElementById('waitingMessage').style.display = 'block';
+                    document.getElementById('waitingMessage').textContent = message.message;
+                    gameStarted = message.canStart;
+                    break;
+                    
+                case 'game_ready':
+                    document.getElementById('waitingMessage').style.display = 'none';
+                    document.getElementById('multiplayerMenu').style.display = 'none';
+                    gameStarted = message.canStart;
+                    if (gameStarted) {
+                        init(true);
+                        animate();
+                    }
+                    break;
+                    
+                case 'error':
+                    console.log('Server error:', message.error);
+                    document.getElementById('errorMessage').textContent = message.error;
+                    document.getElementById('errorMessage').style.display = 'block';
+                    setTimeout(() => {
+                        document.getElementById('errorMessage').style.display = 'none';
+                    }, 5000);
+                    showMultiplayerMenu();
+                    break;
+                    
+                // ... rest of the cases ...
+            }
+        }
+
+        function initGame(isMultiplayer = false) {
+            if (isMultiplayer && !gameStarted) {
+                console.log('Cannot start multiplayer game yet - waiting for players');
+                return;
+            }
+            
+            // ... rest of initGame function ...
+        }
+
+        function getRandomEmptyCell(maze) {
+            const width = maze.maze[0].length;
+            const height = maze.maze.length;
+            let attempts = 0;
+            const maxAttempts = 100;
+
+            while (attempts < maxAttempts) {
+                const x = Math.floor(Math.random() * width);
+                const z = Math.floor(Math.random() * height);
+                
+                // Check if this cell is empty (not a wall) and not the start position
+                if (!maze.maze[z][x] && 
+                    (x !== Math.floor(maze.startPosition.x / maze.cellSize) || 
+                     z !== Math.floor(maze.startPosition.z / maze.cellSize))) {
+                    return { x: x, z: z };
+                }
+                attempts++;
+            }
+
+            // If no empty cell found after max attempts, return a default position
+            return { x: 2, z: 2 };
+        }
+
+        function handlePlayerMove(ws, data) {
+            console.log('Received player position:', data);
+            const room = rooms.get(ws.roomCode);
+            if (!room) {
+                console.log('Room not found for player position:', ws.roomCode);
+                return;
+            }
+
+            // Update player position
+            room.playerPositions.set(ws.playerId, {
+                position: data.position,
+                rotation: data.rotation
+            });
+
+            // Send position to all guide and monster players
+            room.players.forEach((playerWs, playerId) => {
+                const role = room.roles.get(playerId);
+                if (role === 'guide' || role === 'monster') {
+                    console.log(`Sending position to ${role}:`, {
+                        position: data.position,
+                        playerId: playerId
+                    });
+                    playerWs.send(JSON.stringify({
+                        type: 'player_position',
+                        position: data.position,
+                        rotation: data.rotation
+                    }));
+                }
+            });
+        }
+
+        // Add these new functions for monster features
+        function updateDistanceIndicator(distance) {
+            let indicator = document.getElementById('distanceIndicator');
+            if (!indicator) {
+                indicator = document.createElement('div');
+                indicator.id = 'distanceIndicator';
+                indicator.style.cssText = `
+                    position: fixed;
+                    top: 60px;
+                    left: 20px;
+                    color: #ff0000;
+                    font-size: 16px;
+                    text-shadow: 0 0 5px rgba(255, 0, 0, 0.5);
+                    z-index: 1000;
+                `;
+                document.body.appendChild(indicator);
+            }
+            indicator.textContent = `Distance to player: ${Math.round(distance)} units`;
+        }
+
+        function handleMonsterCatch() {
+            // Create catch notification
+            const notification = document.createElement('div');
+            notification.style.cssText = `
+                position: fixed;
+                top: 50%;
+                left: 50%;
+                transform: translate(-50%, -50%);
+                background: rgba(255, 0, 0, 0.8);
+                color: white;
+                padding: 20px;
+                border-radius: 10px;
+                font-size: 24px;
+                text-align: center;
+                z-index: 1000;
+            `;
+            notification.textContent = 'You caught the player!';
+            document.body.appendChild(notification);
+
+            // Remove notification after 3 seconds
+            setTimeout(() => {
+                notification.remove();
+            }, 3000);
+
+            // TODO: Add game end logic here
+        }
     </script>
 </body>
 </html> 
