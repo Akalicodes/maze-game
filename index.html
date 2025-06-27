@@ -3,9 +3,9 @@
 <head>
     <title>3D Maze Game</title>
     <!-- Load Three.js from local file -->
-    <script src="js/three.min.js"></script>
-    <script src="js/maze-generator.js"></script>
-    <script src="js/multiplayer.js"></script>
+            <script src="js/three.min.js?v=3"></script>
+        <script src="js/maze-generator.js?v=3"></script>
+        <script src="js/multiplayer.js?v=3"></script>
     <script>
         // Verify Three.js loaded
         window.addEventListener('load', function() {
@@ -357,6 +357,33 @@
         <div id="loadingMessage">Loading Game...</div>
     </div>
 
+    <!-- Add new waiting and role assignment screens -->
+    <div id="waitingScreen" style="display: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); text-align: center; background: rgba(0, 0, 0, 0.9); color: white; padding: 40px; border-radius: 20px; z-index: 2000; border: 3px solid #4CAF50; box-shadow: 0 0 30px rgba(76, 175, 80, 0.5);">
+        <h2 style="color: #4CAF50; font-size: 32px; margin-bottom: 20px; text-shadow: 0 0 10px rgba(76, 175, 80, 0.5);">🎮 Waiting for Players</h2>
+        <div class="spinner"></div>
+        <div id="waitingMessage" style="font-size: 20px; margin: 20px 0;">Waiting for players to join...</div>
+        <div id="playerCount" style="font-size: 18px; color: #4CAF50;">Players joined: 1/3</div>
+        <div style="margin-top: 30px; text-align: center;">
+            <div style="font-size: 18px; color: #ccc; margin-bottom: 10px;">Room Code:</div>
+            <div id="waitingRoomCode" style="font-family: monospace; color: #4CAF50; cursor: pointer; padding: 15px 25px; border: 3px solid #4CAF50; border-radius: 10px; font-size: 32px; font-weight: bold; letter-spacing: 4px; background: rgba(76, 175, 80, 0.1); transition: all 0.3s; display: inline-block;" onclick="copyRoomCode(this)" title="Click to copy" onmouseover="this.style.background='rgba(76, 175, 80, 0.2)'" onmouseout="this.style.background='rgba(76, 175, 80, 0.1)'"></div>
+            <div style="font-size: 14px; color: #999; margin-top: 10px;">Click to copy • Share with other players</div>
+        </div>
+    </div>
+
+    <div id="roleAssignmentScreen" style="display: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); text-align: center; background: rgba(0, 0, 0, 0.9); color: white; padding: 40px; border-radius: 20px; z-index: 2000; border: 3px solid #FFD700; box-shadow: 0 0 30px rgba(255, 215, 0, 0.5);">
+        <h2 style="color: #FFD700; font-size: 32px; margin-bottom: 20px; text-shadow: 0 0 10px rgba(255, 215, 0, 0.5);">🎲 Assigning Roles</h2>
+        <div class="spinner" style="border-top-color: #FFD700;"></div>
+        <div style="font-size: 20px; margin: 20px 0;">All players joined! Assigning roles...</div>
+        <div style="font-size: 16px; color: #ccc;">Please wait while roles are being assigned</div>
+    </div>
+
+    <div id="yourRoleScreen" style="display: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); text-align: center; background: rgba(0, 0, 0, 0.9); color: white; padding: 40px; border-radius: 20px; z-index: 2000; border: 3px solid #FF6B6B; box-shadow: 0 0 30px rgba(255, 107, 107, 0.5);">
+        <h2 style="color: #FF6B6B; font-size: 32px; margin-bottom: 20px; text-shadow: 0 0 10px rgba(255, 107, 107, 0.5);">🎭 Your Role</h2>
+        <div id="assignedRole" style="font-size: 36px; font-weight: bold; margin: 20px 0; color: #4CAF50;"></div>
+        <div id="roleDescription" style="font-size: 18px; margin: 20px 0; line-height: 1.5;"></div>
+        <div style="font-size: 16px; color: #FFD700; margin-top: 20px;">Game starting in 3 seconds...</div>
+    </div>
+
     <div id="errorScreen">
         <h2>Error</h2>
         <div id="errorMessage"></div>
@@ -454,6 +481,16 @@
                 multiplayerManager.createRoom();
             };
 
+            multiplayerManager.onMazeDataReceived = (mazeData) => {
+                console.log('🗺️ Maze data received and loaded!', mazeData);
+                maze = mazeData;
+                maze.wallPositions = maze.wallPositions || [];
+                
+                // Now that we have maze data, we can safely initialize the scene
+                console.log('🎬 Initializing scene after maze data received');
+                init(false);
+            };
+
             multiplayerManager.onRoomCreated = (roomCode) => {
                 console.log('Room created with code:', roomCode);
                 hideLoadingScreen();
@@ -461,28 +498,53 @@
                 // Hide all menus
                 hideAllMenus();
                 
-                // Show the room code prominently
-                const roomCodeElement = document.getElementById('roomCode');
-                roomCodeElement.style.display = 'block';
-                roomCodeElement.textContent = roomCode;
-                
-                // Show instructions
-                const instructionsElement = document.getElementById('roomCodeInstructions');
-                instructionsElement.textContent = `Share this code with other players • Click to copy • Waiting for ${requiredPlayers - 1} more players...`;
-                instructionsElement.style.display = 'block';
+                // Show waiting screen
+                document.getElementById('waitingScreen').style.display = 'block';
+                document.getElementById('waitingRoomCode').textContent = roomCode;
+                document.getElementById('playerCount').textContent = 'Players joined: 1/3';
+                document.getElementById('waitingMessage').textContent = 'Waiting for 2 more players to join...';
                 
                 // Set the game mode but don't start yet
                 gameMode = 'multiplayer';
-                playerRole = 'player';
+                playerRole = 'waiting';
                 allPlayersJoined = false;
                 gameStarted = false;
                 
-                // Initialize scene but don't start animation
+                // Host should generate maze data immediately and send it to server
+                console.log('🏠 Room created, host generating maze data...');
+                const generator = new MazeGenerator(MAZE_SIZE.width, MAZE_SIZE.height);
+                maze = generator.generate();
+                
+                // Send maze data to server for distribution to all players
+                multiplayerManager.socket.send(JSON.stringify({
+                    type: 'maze_data',
+                    maze: maze
+                }));
+                
+                console.log('🗺️ Maze generated and sent to server');
+                
+                // Now initialize the scene
                 init(false);
             };
 
             multiplayerManager.onPlayerJoined = (playerId, role) => {
                 console.log('Player joined:', playerId, 'as', role);
+                
+                // Update player count
+                const currentPlayers = Object.keys(otherPlayers).length + 2; // +2 because we're counting this new player
+                document.getElementById('playerCount').textContent = `Players joined: ${currentPlayers}/3`;
+                
+                const playersNeeded = requiredPlayers - currentPlayers;
+                if (playersNeeded > 0) {
+                    document.getElementById('waitingMessage').textContent = `Waiting for ${playersNeeded} more player${playersNeeded > 1 ? 's' : ''} to join...`;
+                } else {
+                    // All players joined - show role assignment screen
+                    document.getElementById('waitingScreen').style.display = 'none';
+                    document.getElementById('roleAssignmentScreen').style.display = 'block';
+                    
+                    document.getElementById('waitingMessage').textContent = 'All players joined! Assigning roles...';
+                }
+                
                 if (!otherPlayers[playerId] && (playerRole === 'player' || playerRole === 'monster')) {
                     console.log('Creating representation for player:', playerId, 'with role:', role);
                     
@@ -537,29 +599,80 @@
                         console.log('Added player representation to scene:', playerId);
                     }
                 }
+            };
+
+            multiplayerManager.onRoleAssigned = (role, message) => {
+                console.log('🎭 Role assigned:', role, message);
+                playerRole = role;
                 
-                // Update waiting message
-                const instructionsElement = document.getElementById('roomCodeInstructions');
-                const currentPlayers = Object.keys(otherPlayers).length + 1;
-                const playersNeeded = requiredPlayers - currentPlayers;
+                // Hide role assignment screen and show your role screen
+                document.getElementById('roleAssignmentScreen').style.display = 'none';
+                document.getElementById('yourRoleScreen').style.display = 'block';
                 
-                if (playersNeeded > 0) {
-                    instructionsElement.textContent = `Share this code with other players • Click to copy • Waiting for ${playersNeeded} more player${playersNeeded > 1 ? 's' : ''}...`;
+                // Update role information
+                document.getElementById('assignedRole').textContent = role.toUpperCase();
+                
+                // Set role descriptions
+                let description = '';
+                switch(role) {
+                    case 'player':
+                        description = 'Navigate through the maze to find the green exit. Use WASD to move and mouse to look around. Avoid the monster!';
+                        break;
+                    case 'guide':
+                        description = 'Help the player reach the exit using your top-down 2D view. You can see the entire maze layout and all player positions.';
+                        break;
+                    case 'monster':
+                        description = 'Hunt the player in first-person view! Use WASD to move and mouse to look around. Catch the player before they escape!';
+                        break;
+                    default:
+                        description = message || 'Unknown role';
                 }
+                document.getElementById('roleDescription').textContent = description;
+                
+                // DON'T initialize the scene yet - wait for onGameReady
+                // This prevents race conditions with maze data loading
+                console.log('🎭 Role assigned, waiting for game ready signal...');
             };
 
             multiplayerManager.onGameReady = () => {
-                console.log('All players have joined, starting game...');
+                console.log('🎮 onGameReady called - Current role:', playerRole, 'Maze exists:', !!maze);
                 allPlayersJoined = true;
                 gameStarted = true;
                 
-                // Hide the room code and instructions
-                document.getElementById('roomCode').style.display = 'none';
-                document.getElementById('roomCodeInstructions').style.display = 'none';
-                document.getElementById('waitingMessage').style.display = 'none';
+                // Hide all UI screens
+                hideAllMenus();
                 
-                // Start the game animation
-                animate();
+                // Wait for maze data if not available
+                if (!maze) {
+                    console.log('🎮 No maze data yet, waiting...');
+                    setTimeout(() => {
+                        if (maze) {
+                            console.log('🎮 Maze data now available, starting game');
+                            multiplayerManager.onGameReady();
+                        } else {
+                            console.error('🎮 Still no maze data after waiting');
+                        }
+                    }, 100);
+                    return;
+                }
+                
+                // Add a 3-second countdown before starting
+                setTimeout(() => {
+                    // Force game start based on role
+                    console.log('🎮 Starting game for role:', playerRole);
+                    if (playerRole === 'guide') {
+                        console.log('🎮 Starting GUIDE view');
+                        initGuideView(maze);
+                    } else if (playerRole === 'player' || playerRole === 'monster') {
+                        console.log('🎮 Starting 3D view for:', playerRole);
+                        // Always call init(true) to ensure fresh initialization
+                        init(true);
+                    } else {
+                        console.log('🎮 Unknown role:', playerRole);
+                    }
+                    
+
+                }, 3000);
             };
 
             multiplayerManager.onPlayerLeft = (playerId) => {
@@ -653,7 +766,11 @@
                 'roomCodeInstructions',
                 'loadingScreen',
                 'errorScreen',
-                'guideView'
+                'guideView',
+                'waitingScreen',
+                'roleAssignmentScreen',
+                'yourRoleScreen',
+                'simple-waiting'
             ];
             
             menuElements.forEach(elementId => {
@@ -704,35 +821,52 @@
             }
         }
 
-        function init() {
-            console.log('Initializing game in mode:', gameMode, 'role:', playerRole);
+        function init(shouldStartAnimation = true) {
+            console.log('🎬 INIT CALLED: mode=', gameMode, 'role=', playerRole, 'shouldStartAnimation=', shouldStartAnimation, 'mazeExists=', !!maze);
             
             try {
                 // Only guide gets the 2D view
                 if (playerRole === 'guide') {
+                    console.log('🎮 Initializing GUIDE view...');
                     // Initialize guide view
                     document.body.style.cursor = 'default';
                     if (maze) {
+                        console.log('🗺️ Maze data available for guide, calling initGuideView');
                         initGuideView(maze);
                     } else {
-                        console.error('No maze data available for guide view');
+                        console.error('❌ No maze data available for guide view');
                         document.body.innerHTML = '<div style="color: red; text-align: center; margin-top: 50px;">Error: No maze data available. Please try refreshing the page.</div>';
                     }
                     return;
                 }
 
+                console.log('🎮 Initializing 3D view for role:', playerRole);
+
                 // Both player and monster get the same 3D setup
+                console.log('🎨 Creating THREE.js scene...');
                 scene = new THREE.Scene();
                 scene.background = new THREE.Color(0x000000);
                 
                 // Create renderer
+                console.log('🖥️ Creating WebGL renderer...');
                 renderer = new THREE.WebGLRenderer({ 
                     antialias: true,
                     powerPreference: "high-performance"
                 });
                 renderer.setSize(window.innerWidth, window.innerHeight);
                 renderer.setPixelRatio(window.devicePixelRatio);
+                
+                // Style the renderer canvas properly
+                renderer.domElement.style.position = 'fixed';
+                renderer.domElement.style.top = '0';
+                renderer.domElement.style.left = '0';
+                renderer.domElement.style.width = '100%';
+                renderer.domElement.style.height = '100%';
+                renderer.domElement.style.zIndex = '1';
+                renderer.domElement.style.display = 'block';
+                
                 document.body.appendChild(renderer.domElement);
+                console.log('🖥️ Renderer canvas added to DOM');
                 
                 // Create first-person camera
                 camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
@@ -740,24 +874,22 @@
                 // Load textures
                 textureLoader = new THREE.TextureLoader();
                 
-                // Generate new maze for single player or host
-                if (gameMode === 'single' || (multiplayerManager && multiplayerManager.isHost && !maze)) {
+                // Generate new maze only for single player mode
+                if (gameMode === 'single' && !maze) {
                     const generator = new MazeGenerator(MAZE_SIZE.width, MAZE_SIZE.height);
                     maze = generator.generate();
-                    
-                    // Send maze data immediately if we're the host
-                    if (multiplayerManager && multiplayerManager.isHost) {
-                        console.log('Host sending initial maze data:', maze);
-                        multiplayerManager.socket.send(JSON.stringify({
-                            type: 'maze_data',
-                            maze: maze
-                        }));
-                    }
+                    console.log('✅ Generated maze for single player mode');
                 }
                 
                 if (!maze) {
+                    console.error('❌ No maze data available when trying to init 3D view');
                     throw new Error('No maze data available');
                 }
+                console.log('✅ Maze data is available for 3D view');
+
+                // Clean up any existing role labels first
+                const existingLabels = document.querySelectorAll('.role-label');
+                existingLabels.forEach(label => label.remove());
 
                 // Set starting position based on role
                 if (playerRole === 'monster') {
@@ -772,6 +904,7 @@
 
                     // Add monster UI overlay
                     const monsterInstructions = document.createElement('div');
+                    monsterInstructions.className = 'role-label';
                     monsterInstructions.style.cssText = `
                         position: fixed;
                         top: 20px;
@@ -781,13 +914,9 @@
                         text-shadow: 0 0 5px rgba(255, 0, 0, 0.5);
                         z-index: 1000;
                     `;
-                    monsterInstructions.innerHTML = `
-                        Monster View - Find and catch the player before they escape!<br>
-                        Use WASD to move and mouse to look around<br>
-                        The player appears as a green cylinder
-                    `;
+                    monsterInstructions.innerHTML = `Monster View`;
                     document.body.appendChild(monsterInstructions);
-                } else {
+                } else if (playerRole === 'player') {
                     // Set player starting position
                     camera.position.set(
                         maze.startPosition.x,
@@ -795,6 +924,21 @@
                         maze.startPosition.z
                     );
                     console.log('Player spawned at:', camera.position);
+
+                    // Add player UI overlay
+                    const playerInstructions = document.createElement('div');
+                    playerInstructions.className = 'role-label';
+                    playerInstructions.style.cssText = `
+                        position: fixed;
+                        top: 20px;
+                        left: 20px;
+                        color: #4CAF50;
+                        font-size: 18px;
+                        text-shadow: 0 0 5px rgba(76, 175, 80, 0.5);
+                        z-index: 1000;
+                    `;
+                    playerInstructions.innerHTML = `Player`;
+                    document.body.appendChild(playerInstructions);
                 }
 
                 // Make sure guide view is hidden for both player and monster
@@ -807,18 +951,52 @@
                 mazeGroup = new THREE.Group();
                 generateNewMaze();
                 
-                // Set up controls and start animation
+                // Set up controls
                 controls = setupControls();
-                gameStarted = true;
-                animate();
                 
-                // Request pointer lock for both player and monster
-                renderer.domElement.requestPointerLock();
+                // Only start animation and game if requested
+                if (shouldStartAnimation) {
+                    console.log('🎬 Starting animation and game...');
+                    gameStarted = true;
+                    animate();
+                    
+                    // Request pointer lock for both player and monster
+                    renderer.domElement.requestPointerLock();
+                    console.log('🎬 Animation started and pointer lock requested');
+                } else {
+                    gameStarted = false;
+                    console.log('🎬 Game initialized but not started - waiting for all players');
+                }
                 
                 console.log('Game initialized in mode:', gameMode, 'role:', playerRole, 'with first-person view');
             } catch (error) {
-                console.error('Error initializing game:', error);
-                document.body.innerHTML = '<div style="color: red; text-align: center; margin-top: 50px;">Error: Failed to initialize game. Please try refreshing the page.</div>';
+                console.error('❌ Error initializing game:', error);
+                // Show detailed error information
+                const errorDiv = document.createElement('div');
+                errorDiv.style.cssText = `
+                    position: fixed;
+                    top: 50%;
+                    left: 50%;
+                    transform: translate(-50%, -50%);
+                    background: rgba(0, 0, 0, 0.9);
+                    color: white;
+                    padding: 20px;
+                    border-radius: 10px;
+                    text-align: center;
+                    z-index: 9999;
+                    max-width: 80%;
+                `;
+                errorDiv.innerHTML = `
+                    <h3>🚨 Game Initialization Error</h3>
+                    <p>Role: ${playerRole || 'Unknown'}</p>
+                    <p>Maze available: ${!!maze ? 'Yes' : 'No'}</p>
+                    <p>Scene exists: ${!!scene ? 'Yes' : 'No'}</p>
+                    <p>Error: ${error.message}</p>
+                    <button onclick="location.reload()" style="margin-top: 15px; padding: 10px 20px; background: #ff4444; color: white; border: none; border-radius: 5px; cursor: pointer;">
+                        Reload Game
+                    </button>
+                `;
+                document.body.appendChild(errorDiv);
             }
         }
 
@@ -1256,31 +1434,138 @@
                 multiplayerManager.joinRoom(roomCode);
             };
 
+            multiplayerManager.onMazeDataReceived = (mazeData) => {
+                console.log('🗺️ Maze data received and loaded!', mazeData);
+                maze = mazeData;
+                maze.wallPositions = maze.wallPositions || [];
+                
+                // Now that we have maze data, we can safely initialize the scene
+                console.log('🎬 Initializing scene after maze data received');
+                init(false);
+            };
+
             multiplayerManager.onRoomJoined = () => {
                 console.log('Successfully joined room:', roomCode);
                 hideLoadingScreen();
                 
                 // Hide all menus
-                document.getElementById('startScreen').style.display = 'none';
-                document.getElementById('multiplayerMenu').style.display = 'none';
-                document.getElementById('roomCodeInput').style.display = 'none';
+                hideAllMenus();
                 
-                // Set the game mode
+                // Show simple waiting message
+                const waitingDiv = document.createElement('div');
+                waitingDiv.id = 'simple-waiting';
+                waitingDiv.style.cssText = `
+                    position: fixed;
+                    top: 50%;
+                    left: 50%;
+                    transform: translate(-50%, -50%);
+                    color: white;
+                    font-size: 24px;
+                    text-align: center;
+                    z-index: 1000;
+                `;
+                waitingDiv.innerHTML = 'Waiting for players...';
+                document.body.appendChild(waitingDiv);
+                
+                // Set the game mode but don't start yet
                 gameMode = 'multiplayer';
+                playerRole = 'waiting';
+                allPlayersJoined = false;
+                gameStarted = false;
                 
-                // Initialize view based on role - this was the bug, we were always initializing guide view
-                if (playerRole === 'guide') {
-                    // Wait for maze data before initializing guide view
-                    console.log('Guide role assigned, waiting for maze data');
-                } else if (playerRole === 'monster') {
-                    // Monster should get 3D view
-                    console.log('Monster role assigned, will initialize 3D view when maze data arrives');
-                    document.getElementById('guideView').style.display = 'none';
+                console.log('🏠 Room joined, showing simple waiting message...');
+            };
+
+            // Add the same event handlers as createRoom
+            multiplayerManager.onPlayerJoined = (playerId, role) => {
+                console.log('Player joined:', playerId, 'as', role);
+                
+                // For joinRoom, just wait silently - no UI updates needed
+                const currentPlayers = Object.keys(otherPlayers).length + 2;
+                const playersNeeded = requiredPlayers - currentPlayers;
+                
+                if (playersNeeded > 0) {
+                    console.log(`Waiting for ${playersNeeded} more player${playersNeeded > 1 ? 's' : ''} to join...`);
                 } else {
-                    // Player should get 3D view
-                    console.log('Player role assigned, will initialize 3D view when maze data arrives');
-                    document.getElementById('guideView').style.display = 'none';
+                    console.log('All players joined! Waiting for role assignment...');
                 }
+            };
+
+            multiplayerManager.onRoleAssigned = (role, message) => {
+                console.log('🎭 Role assigned:', role, message);
+                playerRole = role;
+                
+                // Remove simple waiting message if it exists
+                const simpleWaiting = document.getElementById('simple-waiting');
+                if (simpleWaiting) {
+                    simpleWaiting.remove();
+                }
+                
+                // Hide role assignment screen and show your role screen
+                document.getElementById('roleAssignmentScreen').style.display = 'none';
+                document.getElementById('yourRoleScreen').style.display = 'block';
+                
+                // Update role information
+                document.getElementById('assignedRole').textContent = role.toUpperCase();
+                
+                // Set role descriptions
+                let description = '';
+                switch(role) {
+                    case 'player':
+                        description = 'Navigate through the maze to find the green exit. Use WASD to move and mouse to look around. Avoid the monster!';
+                        break;
+                    case 'guide':
+                        description = 'Help the player reach the exit using your top-down 2D view. You can see the entire maze layout and all player positions.';
+                        break;
+                    case 'monster':
+                        description = 'Hunt the player in first-person view! Use WASD to move and mouse to look around. Catch the player before they escape!';
+                        break;
+                    default:
+                        description = message || 'Unknown role';
+                }
+                document.getElementById('roleDescription').textContent = description;
+                
+                // DON'T initialize the scene yet - wait for onGameReady
+                console.log('🎭 Role assigned, waiting for game ready signal...');
+            };
+
+            multiplayerManager.onGameReady = () => {
+                console.log('🎮 onGameReady called - Current role:', playerRole, 'Maze exists:', !!maze);
+                allPlayersJoined = true;
+                gameStarted = true;
+                
+                // Hide all UI screens
+                hideAllMenus();
+                
+                // Wait for maze data if not available
+                if (!maze) {
+                    console.log('🎮 No maze data yet, waiting...');
+                    setTimeout(() => {
+                        if (maze) {
+                            console.log('🎮 Maze data now available, starting game');
+                            multiplayerManager.onGameReady();
+                        } else {
+                            console.error('🎮 Still no maze data after waiting');
+                        }
+                    }, 100);
+                    return;
+                }
+                
+                // Add a 3-second countdown before starting
+                setTimeout(() => {
+                    // Force game start based on role
+                    console.log('🎮 Starting game for role:', playerRole);
+                    if (playerRole === 'guide') {
+                        console.log('🎮 Starting GUIDE view');
+                        initGuideView(maze);
+                    } else if (playerRole === 'player' || playerRole === 'monster') {
+                        console.log('🎮 Starting 3D view for:', playerRole);
+                        // Always call init(true) to ensure fresh initialization
+                        init(true);
+                    } else {
+                        console.log('🎮 Unknown role:', playerRole);
+                    }
+                }, 3000);
             };
 
             multiplayerManager.onError = (error) => {
@@ -1442,7 +1727,8 @@
 
         function initGuideView(mazeData) {
             try {
-                if (!mazeData?.maze) throw new Error('Invalid maze data');
+                if (!mazeData) throw new Error('No maze data provided');
+                console.log('🗺️ Initializing guide view with maze data:', mazeData);
 
                 // Clean up
                 if (renderer?.domElement?.parentNode) {
@@ -1528,7 +1814,7 @@
         }
 
         function drawGuideView(mazeData, playerPos, monsterPos) {
-            if (!mazeData?.maze) return;
+            if (!mazeData || !mazeData.maze) return;
             
             const config = window.guideViewConfig;
             if (!config) return;
@@ -1852,48 +2138,113 @@
             }
         };
 
-        // Modify MultiplayerManager message handling
-        const originalHandleMessage = MultiplayerManager.prototype.handleMessage;
+        // Override MultiplayerManager message handling completely
         MultiplayerManager.prototype.handleMessage = function(message) {
-            console.log('MultiplayerManager received message:', message);
+            console.log('🔔 CLIENT: Received message:', message.type, message);
             
             switch (message.type) {
                 case 'room_created':
-                    console.log('Room created with role:', message.role);
-                    playerRole = message.role;
+                    console.log('🏠 Room created, setting up...');
                     this.roomCode = message.roomCode;
                     this.isHost = true;
+                    this.role = message.role;
+                    playerRole = message.role; // This will be 'waiting' initially
+                    this.gameState.players.add('host');
+                    this.gameState.playerCount = 1;
+                    this.gameState.canStart = false;
+                    this.gameState.allPlayersJoined = false;
                     if (this.onRoomCreated) {
                         this.onRoomCreated(message.roomCode);
                     }
                     break;
 
                 case 'room_joined':
-                    console.log('Room joined with role:', message.role);
-                    playerRole = message.role;
+                    console.log('🚪 Room joined, setting up...');
                     this.roomCode = message.roomCode;
-                    
+                    this.role = message.role;
+                    playerRole = message.role; // This will be 'waiting' initially
+                    this.gameState.canStart = false;
+                    this.gameState.allPlayersJoined = false;
                     if (this.onRoomJoined) {
                         this.onRoomJoined();
                     }
                     break;
 
-                case 'game_ready':
-                    console.log('Game ready received, all players joined');
-                    // Hide room code and waiting messages
-                    document.getElementById('roomCode').style.display = 'none';
-                    document.getElementById('roomCodeInstructions').style.display = 'none';
-                    document.getElementById('multiplayerMenu').style.display = 'none';
-                    
-                    // Start the game if not already started
-                    if (!gameStarted) {
-                        gameStarted = true;
-                        console.log('Starting game with role:', playerRole);
-                        init();
-                        animate();
+                case 'player_joined':
+                    console.log('👥 Player joined');
+                    this.gameState.players.add(message.playerId);
+                    this.gameState.playerCount++;
+                    if (this.onPlayerJoined) {
+                        this.onPlayerJoined(message.playerId, message.role);
                     }
                     break;
 
+                case 'role_assigned':
+                    console.log('🎭 ROLE ASSIGNED:', message.role);
+                    this.role = message.role;
+                    playerRole = message.role; // This is the actual game role
+                    if (this.onRoleAssigned) {
+                        console.log('🎭 Calling onRoleAssigned callback');
+                        this.onRoleAssigned(message.role, message.message);
+                    }
+                    break;
+
+                case 'game_ready':
+                    console.log('🎮 GAME READY - Starting game');
+                    this.gameState.allPlayersJoined = true;
+                    this.gameState.canStart = true;
+                    if (this.onGameReady) {
+                        console.log('🎮 Calling onGameReady callback');
+                        this.onGameReady();
+                    }
+                    break;
+
+                case 'waiting_for_players':
+                    console.log('⏳ Waiting for players...');
+                    this.gameState.allPlayersJoined = false;
+                    this.gameState.canStart = false;
+                    break;
+
+                case 'player_left':
+                    console.log('👋 Player left');
+                    this.gameState.players.delete(message.playerId);
+                    this.gameState.playerCount--;
+                    this.gameState.canStart = false;
+                    this.gameState.allPlayersJoined = false;
+                    if (this.onPlayerLeft) {
+                        this.onPlayerLeft(message.playerId);
+                    }
+                    break;
+
+                case 'maze_data':
+                    console.log('🗺️ Received maze data');
+                    maze = message.maze;
+                    maze.wallPositions = maze.wallPositions || [];
+                    break;
+
+                case 'error':
+                    console.error('❌ Server error:', message.error);
+                    if (this.onError) {
+                        this.onError(message.error);
+                    }
+                    break;
+
+                case 'player_position':
+                case 'monster_position':
+                    // Handle position updates separately
+                    handleMultiplayerMessage(message);
+                    break;
+
+                default:
+                    console.log('❓ Unknown message type:', message.type);
+                    break;
+            }
+        };
+
+        function handleMultiplayerMessage(message) {
+            console.log('Handling message:', message);
+            
+            switch (message.type) {
                 case 'player_position':
                     if (!message.position || typeof message.position.x !== 'number' || typeof message.position.z !== 'number') {
                         console.error('Invalid player position received:', message.position);
@@ -2174,55 +2525,7 @@
             }
         };
 
-        function handleMultiplayerMessage(message) {
-            console.log('Handling message:', message);
-            
-            switch (message.type) {
-                case 'room_created':
-                    roomCode = message.roomCode;
-                    playerRole = message.role;
-                    document.getElementById('roomCode').textContent = roomCode;
-                    document.getElementById('waitingMessage').style.display = 'block';
-                    document.getElementById('waitingMessage').textContent = 'Waiting for other players to join...';
-                    break;
-                    
-                case 'room_joined':
-                    roomCode = message.roomCode;
-                    playerRole = message.role;
-                    document.getElementById('roomCode').textContent = roomCode;
-                    document.getElementById('waitingMessage').style.display = 'block';
-                    document.getElementById('waitingMessage').textContent = 'Waiting for other players...';
-                    break;
-                    
-                case 'waiting_for_players':
-                    document.getElementById('waitingMessage').style.display = 'block';
-                    document.getElementById('waitingMessage').textContent = message.message;
-                    gameStarted = message.canStart;
-                    break;
-                    
-                case 'game_ready':
-                    document.getElementById('waitingMessage').style.display = 'none';
-                    document.getElementById('multiplayerMenu').style.display = 'none';
-                    gameStarted = message.canStart;
-                    if (gameStarted) {
-                        init(true);
-                        animate();
-                    }
-                    break;
-                    
-                case 'error':
-                    console.log('Server error:', message.error);
-                    document.getElementById('errorMessage').textContent = message.error;
-                    document.getElementById('errorMessage').style.display = 'block';
-                    setTimeout(() => {
-                        document.getElementById('errorMessage').style.display = 'none';
-                    }, 5000);
-                    showMultiplayerMenu();
-                    break;
-                    
-                // ... rest of the cases ...
-            }
-        }
+
 
         function initGame(isMultiplayer = false) {
             if (isMultiplayer && !gameStarted) {

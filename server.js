@@ -66,8 +66,34 @@ function getRoomStatus(room) {
         hasGuide: roles.includes('guide'),
         hasMonster: roles.includes('monster'),
         hasPlayer: roles.includes('player'),
-        availableRoles: roles
+        availableRoles: roles,
+        allPlayersJoined: playerCount === 3
     };
+}
+
+// Function to randomly assign roles when all players have joined
+function assignRandomRoles(room) {
+    const allRoles = ['player', 'guide', 'monster'];
+    const playerIds = Array.from(room.players.keys());
+    
+    // Shuffle the roles array
+    for (let i = allRoles.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [allRoles[i], allRoles[j]] = [allRoles[j], allRoles[i]];
+    }
+    
+    // Assign shuffled roles to players
+    playerIds.forEach((playerId, index) => {
+        const role = allRoles[index];
+        room.roles.set(playerId, role);
+        
+        const playerWs = room.players.get(playerId);
+        if (playerWs) {
+            playerWs.role = role;
+        }
+    });
+    
+    console.log(`🎲 Roles randomly assigned in room ${room.host}: ${playerIds.map((id, i) => `${id.slice(0, 8)}=${allRoles[i]}`).join(', ')}`);
 }
 
 function handleCreateRoom(ws) {
@@ -75,12 +101,12 @@ function handleCreateRoom(ws) {
     const playerId = uuidv4();
     const mazeSeed = Math.floor(Math.random() * 1000000);
     
-    // Create new room with roles and seed - first player is always the regular player
+    // Create new room with temporary roles - roles will be assigned randomly when all players join
     const room = {
         host: playerId,
         players: new Map([[playerId, ws]]),
         playerPositions: new Map(),
-        roles: new Map([[playerId, 'player']]), // First player is always the regular player
+        roles: new Map([[playerId, 'waiting']]), // Temporary role until all players join
         mazeSeed: mazeSeed,
         mazeData: null,
         createdAt: Date.now(),
@@ -95,19 +121,19 @@ function handleCreateRoom(ws) {
     // Store room code and player ID in the WebSocket object
     ws.roomCode = roomCode;
     ws.playerId = playerId;
-    ws.role = 'player';
+    ws.role = 'waiting';
     ws.isAlive = true;
 
     // Send room created confirmation
     ws.send(JSON.stringify({
         type: 'room_created',
         roomCode: roomCode,
-        role: 'player',
+        role: 'waiting',
         mazeSeed: mazeSeed,
         canStart: false
     }));
 
-    console.log(`🏠 Room ${roomCode} created | Player: ${playerId} | Seed: ${mazeSeed}`);
+    console.log(`🏠 Room ${roomCode} created | Player: ${playerId} (waiting) | Seed: ${mazeSeed}`);
     console.log(`📊 Active rooms: ${rooms.size} | Codes: [${Array.from(rooms.keys()).join(', ')}]`);
 }
 
@@ -133,38 +159,22 @@ function handleJoinRoom(ws, roomCode) {
 
     const playerId = uuidv4();
     
-    // Determine role based on what's already taken
-    let role;
-    if (!status.hasGuide) {
-        role = 'guide';
-    } else if (!status.hasMonster) {
-        role = 'monster';
-    } else if (!status.hasPlayer) {
-        role = 'player';
-    } else {
-        ws.send(JSON.stringify({
-            type: 'error',
-            error: 'No roles available. Please try another room.'
-        }));
-        return;
-    }
-    
-    // Add player to room
+    // Add player to room with temporary "waiting" role
     room.players.set(playerId, ws);
-    room.roles.set(playerId, role);
+    room.roles.set(playerId, 'waiting');
     room.playerActivity.set(playerId, Date.now());
     
     // Update WebSocket state
     ws.roomCode = roomCode;
     ws.playerId = playerId;
-    ws.role = role;
+    ws.role = 'waiting';
     ws.isAlive = true;
 
-    // Send join confirmation
+    // Send join confirmation with waiting role
     ws.send(JSON.stringify({
         type: 'room_joined',
         roomCode: roomCode,
-        role: role,
+        role: 'waiting',
         mazeSeed: room.mazeSeed
     }));
 
@@ -182,23 +192,44 @@ function handleJoinRoom(ws, roomCode) {
             playerWs.send(JSON.stringify({
                 type: 'player_joined',
                 playerId: playerId,
-                role: role
+                role: 'waiting'
             }));
         }
     });
 
-    // Check if room is ready to start
+    // Check if all players have joined (3 players total)
     const newStatus = getRoomStatus(room);
-    if (newStatus.isReady) {
-        console.log(`🎮 Room ${roomCode} ready to start | All roles filled`);
+    if (newStatus.allPlayersJoined) {
+        console.log(`🎮 Room ${roomCode} - all players joined, assigning random roles...`);
+        
+        // Assign random roles to all players
+        assignRandomRoles(room);
+        
+        // Mark game as ready to start
         room.gameStarted = true;
-        room.players.forEach((playerWs) => {
+        
+        // Send role assignments and game ready message to all players
+        room.players.forEach((playerWs, pid) => {
+            const assignedRole = room.roles.get(pid);
+            
+            console.log(`📨 Sending role_assigned to player ${pid.slice(0, 8)}: ${assignedRole}`);
+            // Send role assignment
+            playerWs.send(JSON.stringify({
+                type: 'role_assigned',
+                role: assignedRole,
+                message: `You have been assigned the role: ${assignedRole}`
+            }));
+            
+            console.log(`📨 Sending game_ready to player ${pid.slice(0, 8)}`);
+            // Send game ready message
             playerWs.send(JSON.stringify({
                 type: 'game_ready',
-                message: 'All players have joined. The game can now begin!',
+                message: 'All players have joined and roles have been assigned. The game can now begin!',
                 canStart: true
             }));
         });
+        
+        console.log(`🎮 Room ${roomCode} ready to start with random roles assigned`);
     } else {
         console.log('Waiting for more players');
         const remainingPlayers = 3 - room.players.size;

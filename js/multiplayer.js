@@ -11,6 +11,8 @@ class MultiplayerManager {
         this.onRoomCreated = null;
         this.onRoomJoined = null;
         this.onGameReady = null;
+        this.onRoleAssigned = null;
+        this.onMazeDataReceived = null;
         this.onError = null;
         this.connectionAttempts = 0;
         this.maxConnectionAttempts = 10;
@@ -260,6 +262,15 @@ class MultiplayerManager {
                 }
                 break;
 
+            case 'role_assigned':
+                this.role = message.role;
+                console.log(`🎭 Role assigned: ${message.role}`);
+                // Update the UI or notify about role assignment
+                if (this.onRoleAssigned) {
+                    this.onRoleAssigned(message.role, message.message);
+                }
+                break;
+
             case 'game_ready':
                 this.gameState.allPlayersJoined = true;
                 this.gameState.canStart = true;
@@ -271,6 +282,13 @@ class MultiplayerManager {
             case 'waiting_for_players':
                 this.gameState.allPlayersJoined = false;
                 this.gameState.canStart = false;
+                break;
+
+            case 'maze_data':
+                console.log('🗺️ Received maze data');
+                if (this.onMazeDataReceived) {
+                    this.onMazeDataReceived(message.maze);
+                }
                 break;
 
             case 'session_expired':
