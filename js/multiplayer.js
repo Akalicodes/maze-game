@@ -41,7 +41,7 @@ class MultiplayerManager {
             role: this.role,
             isHost: this.isHost
         };
-        console.log('Starting new game session:', this.gameState.sessionId);
+        console.log('🎮 Session started:', this.gameState.sessionId);
     }
 
     endSession() {
@@ -50,7 +50,7 @@ class MultiplayerManager {
         this.gameState.players.clear();
         this.gameState.lastKnownState = null;
         this.gameState.reconnecting = false;
-        console.log('Ending game session');
+        console.log('🛑 Session ended');
     }
 
     updateActivity() {

@@ -395,14 +395,24 @@
         let gameStarted = false;
         let playerRole = null;
         let guideCanvas, guideCtx;
-        let playerPosition = null;
-        let monsterPosition = null;  // Add this line to store monster position
+        let playerPositions = {}; // Track positions by player ID
+        let monsterPositions = {}; // Track monster positions by player ID
         let allPlayersJoined = false;
         let requiredPlayers = 3;
         let roomCode = null;
         let lastPositionUpdate = 0;
-        const POSITION_UPDATE_INTERVAL = 50; // Changed from 100ms to 50ms for more frequent updates
+        const POSITION_UPDATE_INTERVAL = 100; // Throttle position updates for better performance
         let monsterTexture = null;
+        // Add smoothing state variables at the top of the file, after other variable declarations
+        let lastPlayerPos = null;
+        let lastMonsterPos = null;
+        const positionSmoothingFactor = 0.3;
+        const rotationSmoothingFactor = 0.3;
+        // Performance optimization variables
+        let lastArrowUpdate = 0;
+        const ARROW_UPDATE_INTERVAL = 100; // Update arrow every 100ms for better performance
+        let rotationBuffer = [];
+        const ROTATION_BUFFER_SIZE = 3; // Reduce buffer size for memory efficiency
 
         function createMonsterMesh() {
             // Create a plane geometry that always faces the camera
@@ -479,7 +489,7 @@
                     // Create a more visible representation for players
                     let playerMesh;
                     if (role === 'monster') {
-                        // Monster representation
+                        // Monster representation for player's view
                         playerMesh = new THREE.Mesh(
                             new THREE.CylinderGeometry(0.3, 0.3, 2, 8),
                             new THREE.MeshPhongMaterial({ 
@@ -488,8 +498,8 @@
                                 emissiveIntensity: 0.5
                             })
                         );
-                    } else {
-                        // Player representation - more visible for monster
+                    } else if (role === 'player' && playerRole === 'monster') {
+                        // Player representation for monster's view - bright green cylinder
                         const playerGeometry = new THREE.Group();
                         
                         // Main body - taller and brighter cylinder
@@ -519,12 +529,13 @@
                         playerMesh = playerGeometry;
                     }
                     
-                    otherPlayers[playerId] = playerMesh;
-                    otherPlayers[playerId].position.set(0, 1, 0);
-                    otherPlayers[playerId].visible = true;
-                    scene.add(otherPlayers[playerId]);
-                    
-                    console.log('Added player representation to scene:', playerId);
+                    if (playerMesh) {
+                        otherPlayers[playerId] = playerMesh;
+                        otherPlayers[playerId].position.set(0, 1, 0);
+                        otherPlayers[playerId].visible = true;
+                        scene.add(otherPlayers[playerId]);
+                        console.log('Added player representation to scene:', playerId);
+                    }
                 }
                 
                 // Update waiting message
@@ -552,11 +563,14 @@
             };
 
             multiplayerManager.onPlayerLeft = (playerId) => {
-                console.log('Player left:', playerId);
                 if (otherPlayers[playerId]) {
                     scene.remove(otherPlayers[playerId]);
                     delete otherPlayers[playerId];
                 }
+                
+                // Clean up position tracking for disconnected player
+                delete playerPositions[playerId];
+                delete monsterPositions[playerId];
                 
                 // Update UI to show disconnection and waiting state
                 const currentPlayers = Object.keys(otherPlayers).length + 1;
@@ -651,9 +665,12 @@
         }
 
         function cleanupRenderer() {
-            if (renderer && renderer.domElement && renderer.domElement.parentNode) {
+            if (window.animationFrameId) {
                 cancelAnimationFrame(window.animationFrameId);
-                
+                window.animationFrameId = null;
+            }
+            
+            if (renderer && renderer.domElement && renderer.domElement.parentNode) {
                 // Remove pointer lock event listeners
                 document.removeEventListener('pointerlockchange', onPointerLockChange);
                 document.removeEventListener('pointerlockerror', onPointerLockError);
@@ -666,6 +683,17 @@
                 
                 renderer.domElement.parentNode.removeChild(renderer.domElement);
                 renderer.dispose();
+                renderer = null;
+            }
+            
+            // Clean up event listeners
+            if (keydownListener) {
+                document.removeEventListener('keydown', keydownListener);
+                keydownListener = null;
+            }
+            if (keyupListener) {
+                document.removeEventListener('keyup', keyupListener);
+                keyupListener = null;
             }
         }
 
@@ -963,44 +991,60 @@
                 return { x: false, z: false };
             }
 
-            const playerRadius = 0.4; // Collision radius for the player
-            const wallBuffer = 0.2; // Increased buffer zone to prevent glitching
+            const playerRadius = 0.5;
+            const wallBuffer = 0.3;
             let collisionX = false;
             let collisionZ = false;
+            let nearestWallDist = Infinity;
+            let slideX = 0;
+            let slideZ = 0;
             
+            // Check collision with each wall
             for (const wall of maze.wallPositions) {
+                // Calculate distances for each axis
                 const dx = position.x - wall.x;
                 const dz = position.z - wall.z;
                 const distance = Math.sqrt(dx * dx + dz * dz);
                 
-                // If we're close enough to collide
-                if (distance < maze.cellSize / 2 + playerRadius + wallBuffer) {
-                    // Calculate the angle of approach
-                    const approachAngle = Math.atan2(Math.abs(dz), Math.abs(dx));
+                // Calculate the minimum distance needed to avoid collision
+                const minDistance = maze.cellSize / 2 + playerRadius + wallBuffer;
+                
+                // If we're within collision range
+                if (distance < minDistance) {
+                    // Update nearest wall distance
+                    if (distance < nearestWallDist) {
+                        nearestWallDist = distance;
+                        
+                        // Calculate normalized direction from wall to player
+                        const nx = dx / distance;
+                        const nz = dz / distance;
+                        
+                        // Calculate slide vector
+                        const penetration = minDistance - distance;
+                        slideX = nx * penetration;
+                        slideZ = nz * penetration;
+                    }
                     
-                    // Determine collision based on approach angle with wider detection zones
-                    if (approachAngle < Math.PI / 3) { // 60 degree zone for X collision
-                        collisionX = true;
-                    }
-                    if (approachAngle > Math.PI / 6) { // 30 degree zone for Z collision
-                        collisionZ = true;
-                    }
+                    // Set collision flags based on approach angle
+                    const dotX = Math.abs(dx / distance);
+                    const dotZ = Math.abs(dz / distance);
                     
-                    // If we're very close, block both axes to prevent corner glitches
-                    if (distance < (maze.cellSize / 2 + playerRadius) * 0.7) {
-                        collisionX = true;
-                        collisionZ = true;
-                    }
+                    if (dotX > 0.7) collisionX = true;
+                    if (dotZ > 0.7) collisionZ = true;
                 }
             }
             
-            return { x: collisionX, z: collisionZ };
+            return {
+                x: collisionX,
+                z: collisionZ,
+                slideX: slideX,
+                slideZ: slideZ
+            };
         }
 
         function setupControls() {
-            const moveSpeed = playerRole === 'monster' ? 0.1 : 0.15; // Slow down monster
-            const turnSpeed = 0.06;  // Added for camera panning
-            let lastTime = performance.now();
+            const moveSpeed = playerRole === 'monster' ? 0.1 : 0.15;
+            const turnSpeed = 0.06;
             let isPointerLocked = false;
             
             const controls = {
@@ -1019,36 +1063,32 @@
             if (keydownListener) document.removeEventListener('keydown', keydownListener);
             if (keyupListener) document.removeEventListener('keyup', keyupListener);
 
-            // Mouse movement handler
             function onMouseMove(event) {
                 if (isPointerLocked && gameStarted && (playerRole === 'player' || playerRole === 'monster')) {
                     camera.rotation.y -= event.movementX * 0.002;
                 }
             }
 
-            // Pointer lock change handler
             function onPointerLockChange() {
                 isPointerLocked = document.pointerLockElement === renderer.domElement;
             }
 
-            // Pointer lock error handler
             function onPointerLockError() {
                 console.error('Pointer lock error');
             }
 
-            // Add pointer lock event listeners
             document.addEventListener('pointerlockchange', onPointerLockChange);
             document.addEventListener('pointerlockerror', onPointerLockError);
             document.addEventListener('mousemove', onMouseMove);
 
-            // Handle click to start pointer lock
             if (renderer && renderer.domElement) {
                 renderer.domElement.addEventListener('click', () => {
-                    // Remove pointer lock request
+                    if (!isPointerLocked) {
+                        renderer.domElement.requestPointerLock();
+                    }
                 });
             }
 
-            // Handle ESC key to exit pointer lock
             document.addEventListener('keydown', (e) => {
                 if (e.key === 'Escape' && isPointerLocked) {
                     document.exitPointerLock();
@@ -1097,15 +1137,14 @@
                 }
             };
 
-            // Add event listeners
             document.addEventListener('keydown', keydownListener);
             document.addEventListener('keyup', keyupListener);
 
             controls.update = function updateControls() {
                 if (!controls.enabled || !camera || !maze) return;
 
-                const moveSpeed = playerRole === 'monster' ? 0.1 : 0.15; // Slow down monster
-                const turnSpeed = 0.06;  // Added for camera panning
+                const moveSpeed = playerRole === 'monster' ? 0.1 : 0.15;
+                const turnSpeed = 0.06;
                 const newPosition = camera.position.clone();
                 const oldPosition = camera.position.clone();
 
@@ -1126,32 +1165,31 @@
                     camera.rotation.y -= turnSpeed;
                 }
 
-                // Check collisions by testing each axis separately with a small step
-                const stepSize = 0.1;
-                const steps = Math.ceil(Math.max(Math.abs(moveVector.x), Math.abs(moveVector.z)) / stepSize);
-                
-                if (steps > 0) {
-                    const stepX = moveVector.x / steps;
-                    const stepZ = moveVector.z / steps;
+                // Apply movement and check collision
+                if (moveVector.length() > 0) {
+                    // Try to move to new position
+                    const targetPos = {
+                        x: newPosition.x + moveVector.x,
+                        z: newPosition.z + moveVector.z
+                    };
                     
-                    for (let i = 0; i < steps; i++) {
-                        const nextPos = newPosition.clone();
-                        nextPos.x += stepX;
-                        nextPos.z += stepZ;
+                    // Check collision at target position
+                    const collision = checkCollision(targetPos);
+                    
+                    // If there's a collision, try to slide along walls
+                    if (collision.x || collision.z) {
+                        if (!collision.x) newPosition.x = targetPos.x;
+                        if (!collision.z) newPosition.z = targetPos.z;
                         
-                        const collision = checkCollision(nextPos);
-                        
-                        if (!collision.x) {
-                            newPosition.x += stepX;
+                        // Apply sliding motion if available
+                        if (collision.slideX || collision.slideZ) {
+                            newPosition.x += collision.slideX * 0.5;
+                            newPosition.z += collision.slideZ * 0.5;
                         }
-                        if (!collision.z) {
-                            newPosition.z += stepZ;
-                        }
-                        
-                        // If we hit a wall, stop checking further steps
-                        if (collision.x && collision.z) {
-                            break;
-                        }
+                    } else {
+                        // No collision, move freely
+                        newPosition.x = targetPos.x;
+                        newPosition.z = targetPos.z;
                     }
                 }
 
@@ -1435,7 +1473,7 @@
 
                 // Setup canvas
                 guideCanvas = document.getElementById('guideCanvas');
-                guideCtx = guideCanvas.getContext('2d');
+                guideCtx = guideCanvas.getContext('2d', { alpha: false });
 
                 // Calculate optimal size
                 const margin = 80;
@@ -1475,36 +1513,76 @@
             }
         }
 
+        function smoothPosition(current, last) {
+            if (!last) return current;
+            return {
+                x: last.x + (current.x - last.x) * positionSmoothingFactor,
+                y: last.y + (current.y - last.y) * positionSmoothingFactor,
+                z: last.z + (current.z - last.z) * positionSmoothingFactor,
+                rotation: {
+                    x: last.rotation?.x + (current.rotation?.x - last.rotation?.x) * rotationSmoothingFactor || current.rotation?.x,
+                    y: last.rotation?.y + (current.rotation?.y - last.rotation?.y) * rotationSmoothingFactor || current.rotation?.y,
+                    z: last.rotation?.z + (current.rotation?.z - last.rotation?.z) * rotationSmoothingFactor || current.rotation?.z
+                }
+            };
+        }
+
         function drawGuideView(mazeData, playerPos, monsterPos) {
-            console.log('Drawing guide view with:', {
-                playerPos: playerPos,
-                monsterPos: monsterPos
-            });
+            if (!mazeData?.maze) return;
             
             const config = window.guideViewConfig;
-            if (!config || !mazeData?.maze) return;
+            if (!config) return;
+
+            // Apply position smoothing
+            if (playerPos) {
+                if (!lastPlayerPos) {
+                    lastPlayerPos = { ...playerPos };
+                } else {
+                    playerPos = smoothPosition(playerPos, lastPlayerPos);
+                    lastPlayerPos = { ...playerPos };
+                }
+            }
+            
+            if (monsterPos) {
+                if (!lastMonsterPos) {
+                    lastMonsterPos = { ...monsterPos };
+                } else {
+                    monsterPos = smoothPosition(monsterPos, lastMonsterPos);
+                    lastMonsterPos = { ...monsterPos };
+                }
+            }
 
             const { cellSize, margin, worldCellSize } = config;
 
-            // Clear canvas
-            guideCtx.fillStyle = '#000000';
-            guideCtx.fillRect(0, 0, guideCanvas.width, guideCanvas.height);
+            // Create an off-screen canvas for double buffering
+            const offscreenCanvas = document.createElement('canvas');
+            offscreenCanvas.width = guideCanvas.width;
+            offscreenCanvas.height = guideCanvas.height;
+            const offscreenCtx = offscreenCanvas.getContext('2d', { alpha: false });
+            
+            // Enable image smoothing for smoother rendering
+            offscreenCtx.imageSmoothing = true;
+            offscreenCtx.imageSmoothingQuality = 'high';
 
-            // Draw floor with lighter color
-            guideCtx.fillStyle = '#e0e0e0'; // Light gray
-            guideCtx.fillRect(
-                margin, 
-                margin, 
-                mazeData.maze[0].length * cellSize,
-                mazeData.maze.length * cellSize
+            // Clear offscreen canvas with a solid color
+            offscreenCtx.fillStyle = '#000000';
+            offscreenCtx.fillRect(0, 0, offscreenCanvas.width, offscreenCanvas.height);
+
+            // Draw floor with anti-aliasing
+            offscreenCtx.fillStyle = '#e0e0e0';
+            offscreenCtx.fillRect(
+                Math.round(margin),
+                Math.round(margin),
+                Math.round(mazeData.maze[0].length * cellSize),
+                Math.round(mazeData.maze.length * cellSize)
             );
 
             // Draw walls with darker color - flip the z-axis by using (mazeData.maze.length - 1 - z)
             for (let z = 0; z < mazeData.maze.length; z++) {
                 for (let x = 0; x < mazeData.maze[z].length; x++) {
                     if (mazeData.maze[z][x] === 1) {
-                        guideCtx.fillStyle = '#1a1a1a'; // Very dark gray
-                        guideCtx.fillRect(
+                        offscreenCtx.fillStyle = '#1a1a1a'; // Very dark gray
+                        offscreenCtx.fillRect(
                             (mazeData.maze[z].length - 1 - x) * cellSize + margin,
                             (mazeData.maze.length - 1 - z) * cellSize + margin,
                             cellSize,
@@ -1519,170 +1597,66 @@
             const exitZ = Math.floor(mazeData.maze.length - 1 - (mazeData.endPosition.z / worldCellSize)) * cellSize + margin;
             
             // Draw exit marker with glow effect
-            guideCtx.shadowColor = '#4CAF50';
-            guideCtx.shadowBlur = 20;
-            guideCtx.fillStyle = '#4CAF50';
-            
-            // Draw a larger marker to make it more visible
-            const exitMarkerSize = cellSize * 1.2;
-            guideCtx.fillRect(
-                exitX - (exitMarkerSize - cellSize) / 2,
-                exitZ - (exitMarkerSize - cellSize) / 2,
-                exitMarkerSize,
-                exitMarkerSize
-            );
-            
-            // Draw player marker with improved visibility - flip the x coordinate
-            if (playerPos?.x != null && playerPos?.z != null) {
-                // Convert world position to grid position (snapped to cells)
-                const gridX = Math.round((mazeData.maze[0].length - 1 - playerPos.x / worldCellSize));
-                const gridZ = Math.round((mazeData.maze.length - 1 - playerPos.z / worldCellSize));
-                
-                // Convert grid position back to canvas coordinates
-                const canvasX = gridX * cellSize + margin + (cellSize / 2);
-                const canvasZ = gridZ * cellSize + margin + (cellSize / 2);
+            offscreenCtx.shadowColor = '#4CAF50';
+            offscreenCtx.shadowBlur = 15;
+            offscreenCtx.fillStyle = '#4CAF50';
+            offscreenCtx.fillRect(exitX - cellSize/4, exitZ - cellSize/4, cellSize/2, cellSize/2);
 
-                // Draw blue glow effect
-                guideCtx.shadowColor = '#2196F3';
-                guideCtx.shadowBlur = 15;
+            // Draw player position if available
+            if (playerPos && typeof playerPos.x === 'number' && typeof playerPos.z === 'number') {
+                const squareSize = cellSize * 0.6;
                 
-                // Draw player marker as a square that fits perfectly in the cell
-                const squareSize = cellSize * 0.9; // Make it slightly smaller than the cell for visibility
-                guideCtx.fillStyle = '#2196F3';
-                guideCtx.fillRect(
-                    canvasX - squareSize/2,
-                    canvasZ - squareSize/2,
-                    squareSize,
-                    squareSize
-                );
+                // Calculate canvas coordinates for player
+                const canvasX = ((mazeData.maze[0].length - 1) - (playerPos.x / worldCellSize)) * cellSize + margin + cellSize/2;
+                const canvasZ = ((mazeData.maze.length - 1) - (playerPos.z / worldCellSize)) * cellSize + margin + cellSize/2;
                 
-                // Add white border
-                guideCtx.strokeStyle = '#FFFFFF';
-                guideCtx.lineWidth = 2;
-                guideCtx.strokeRect(
+                // Draw player marker
+                offscreenCtx.shadowColor = '#2196F3';
+                offscreenCtx.shadowBlur = 10;
+                offscreenCtx.strokeStyle = '#2196F3';
+                offscreenCtx.lineWidth = 3;
+                
+                // Draw player square
+                offscreenCtx.strokeRect(
                     canvasX - squareSize/2,
                     canvasZ - squareSize/2,
                     squareSize,
                     squareSize
                 );
 
-                // Draw direction indicator (arrow) with improved stability
-                if (playerPos.rotation?.y != null) {
-                    const arrowLength = squareSize * 0.8;
-                    
-                    // Calculate arrow endpoint using player's rotation - adjust for flipped x-axis
-                    // Round the rotation value to reduce jitter
-                    const roundedRotation = Math.round(playerPos.rotation.y * 100) / 100;
-                    const angle = -roundedRotation - Math.PI / 2;
-                    
-                    // Calculate endpoints with rounded values
-                    const endX = Math.round(canvasX - Math.cos(angle) * arrowLength);
-                    const endZ = Math.round(canvasZ - Math.sin(angle) * arrowLength);
-                    
-                    // Draw arrow with thicker lines and anti-aliasing
-                    guideCtx.lineCap = 'round';
-                    guideCtx.lineJoin = 'round';
-                    
-                    // Draw arrow line
-                    guideCtx.beginPath();
-                    guideCtx.moveTo(canvasX, canvasZ);
-                    guideCtx.lineTo(endX, endZ);
-                    guideCtx.strokeStyle = '#FFEB3B';
-                    guideCtx.lineWidth = 4;
-                    guideCtx.stroke();
-                    
-                    // Draw arrow head
-                    const headLength = squareSize * 0.4;
-                    const headAngle = Math.PI / 6;
-                    
-                    // Calculate and round head points
-                    const head1X = Math.round(endX + headLength * Math.cos(angle - headAngle));
-                    const head1Z = Math.round(endZ + headLength * Math.sin(angle - headAngle));
-                    const head2X = Math.round(endX + headLength * Math.cos(angle + headAngle));
-                    const head2Z = Math.round(endZ + headLength * Math.sin(angle + headAngle));
-                    
-                    guideCtx.beginPath();
-                    guideCtx.moveTo(endX, endZ);
-                    guideCtx.lineTo(head1X, head1Z);
-                    guideCtx.moveTo(endX, endZ);
-                    guideCtx.lineTo(head2X, head2Z);
-                    guideCtx.strokeStyle = '#FFEB3B';
-                    guideCtx.lineWidth = 4;
-                    guideCtx.stroke();
-                }
+                // Direction indicator removed - was causing flickering
             }
 
             // Draw monster position if available
-            if (monsterPos?.x != null && monsterPos?.z != null) {
-                console.log('Drawing monster at:', monsterPos);
-                // Convert world position to grid position (snapped to cells)
-                const gridX = Math.round((mazeData.maze[0].length - 1 - monsterPos.x / worldCellSize));
-                const gridZ = Math.round((mazeData.maze.length - 1 - monsterPos.z / worldCellSize));
+            if (monsterPos && typeof monsterPos.x === 'number' && typeof monsterPos.z === 'number') {
+                const diamondSize = cellSize * 0.6;
                 
-                // Convert grid position back to canvas coordinates
-                const canvasX = gridX * cellSize + margin + (cellSize / 2);
-                const canvasZ = gridZ * cellSize + margin + (cellSize / 2);
-
-                // Draw red glow effect for monster
-                guideCtx.shadowColor = '#ff0000';
-                guideCtx.shadowBlur = 15;
+                // Calculate canvas coordinates for monster
+                const canvasX = ((mazeData.maze[0].length - 1) - (monsterPos.x / worldCellSize)) * cellSize + margin + cellSize/2;
+                const canvasZ = ((mazeData.maze.length - 1) - (monsterPos.z / worldCellSize)) * cellSize + margin + cellSize/2;
                 
-                // Draw monster marker as a red diamond
-                const diamondSize = cellSize * 0.9;
-                guideCtx.fillStyle = '#ff0000';
-                guideCtx.beginPath();
-                guideCtx.moveTo(canvasX, canvasZ - diamondSize/2); // Top point
-                guideCtx.lineTo(canvasX + diamondSize/2, canvasZ); // Right point
-                guideCtx.lineTo(canvasX, canvasZ + diamondSize/2); // Bottom point
-                guideCtx.lineTo(canvasX - diamondSize/2, canvasZ); // Left point
-                guideCtx.closePath();
-                guideCtx.fill();
+                // Draw monster marker
+                offscreenCtx.shadowColor = '#ff0000';
+                offscreenCtx.shadowBlur = 10;
+                offscreenCtx.strokeStyle = '#ff0000';
+                offscreenCtx.lineWidth = 3;
                 
-                // Add white border to monster marker
-                guideCtx.strokeStyle = '#FFFFFF';
-                guideCtx.lineWidth = 2;
-                guideCtx.stroke();
-
-                // Draw direction indicator for monster if rotation available
-                if (monsterPos.rotation?.y != null) {
-                    const arrowLength = diamondSize * 0.8;
-                    
-                    // Calculate arrow endpoint using monster's rotation
-                    const angle = -monsterPos.rotation.y - Math.PI / 2;
-                    const endX = canvasX - Math.cos(angle) * arrowLength;
-                    const endZ = canvasZ - Math.sin(angle) * arrowLength;
-                    
-                    // Draw arrow line
-                    guideCtx.beginPath();
-                    guideCtx.moveTo(canvasX, canvasZ);
-                    guideCtx.lineTo(endX, endZ);
-                    guideCtx.strokeStyle = '#ff6b6b'; // Light red color for visibility
-                    guideCtx.lineWidth = 3;
-                    guideCtx.stroke();
-                    
-                    // Draw arrow head
-                    const headLength = diamondSize * 0.4;
-                    const headAngle = Math.PI / 6; // 30 degrees
-                    
-                    guideCtx.beginPath();
-                    guideCtx.moveTo(endX, endZ);
-                    guideCtx.lineTo(
-                        endX + headLength * Math.cos(angle - headAngle),
-                        endZ + headLength * Math.sin(angle - headAngle)
-                    );
-                    guideCtx.moveTo(endX, endZ);
-                    guideCtx.lineTo(
-                        endX + headLength * Math.cos(angle + headAngle),
-                        endZ + headLength * Math.sin(angle + headAngle)
-                    );
-                    guideCtx.strokeStyle = '#ff6b6b';
-                    guideCtx.lineWidth = 3;
-                    guideCtx.stroke();
-                }
+                // Draw diamond shape
+                offscreenCtx.beginPath();
+                offscreenCtx.moveTo(canvasX, canvasZ - diamondSize/2);
+                offscreenCtx.lineTo(canvasX + diamondSize/2, canvasZ);
+                offscreenCtx.lineTo(canvasX, canvasZ + diamondSize/2);
+                offscreenCtx.lineTo(canvasX - diamondSize/2, canvasZ);
+                offscreenCtx.closePath();
+                offscreenCtx.stroke();
             }
 
             // Reset shadow
-            guideCtx.shadowBlur = 0;
+            offscreenCtx.shadowBlur = 0;
+
+            // Copy the offscreen canvas to the visible canvas
+            guideCtx.clearRect(0, 0, guideCanvas.width, guideCanvas.height);
+            guideCtx.drawImage(offscreenCanvas, 0, 0);
         }
 
         function animate() {
@@ -1690,6 +1664,17 @@
             
             if (gameStarted && controls && controls.update) {
                 controls.update(); // Call the controls update function
+                
+                // Check if player has reached the end marker
+                if (playerRole === 'player' && maze && maze.endPosition) {
+                    const distanceToEnd = Math.sqrt(
+                        Math.pow(camera.position.x - maze.endPosition.x, 2) +
+                        Math.pow(camera.position.z - maze.endPosition.z, 2)
+                    );
+                    if (distanceToEnd < 1.0) { // If player is within 1 unit of the end marker
+                        handlePlayerWin();
+                    }
+                }
                 
                 if ((playerRole === 'player' || playerRole === 'monster') && multiplayerManager && multiplayerManager.connected) {
                     const now = Date.now();
@@ -1787,7 +1772,7 @@
                         roomCode: multiplayerManager.roomCode,
                         role: multiplayerManager.role,
                         isHost: multiplayerManager.isHost,
-                        position: playerPosition
+                        position: camera ? { x: camera.position.x, y: camera.position.y, z: camera.position.z } : null
                     };
                 }
             } else {
@@ -1910,14 +1895,14 @@
                     break;
 
                 case 'player_position':
+                    if (!message.position || typeof message.position.x !== 'number' || typeof message.position.z !== 'number') {
+                        console.error('Invalid player position received:', message.position);
+                        return;
+                    }
+
                     if (playerRole === 'guide') {
-                        console.log('Guide received player position:', message);
-                        if (!message.position || typeof message.position.x !== 'number' || typeof message.position.z !== 'number') {
-                            console.error('Invalid player position received:', message.position);
-                            return;
-                        }
-                        
-                        playerPosition = {
+                        // Store position for this specific player ID
+                        playerPositions[message.playerId] = {
                             x: message.position.x,
                             y: message.position.y,
                             z: message.position.z,
@@ -1925,13 +1910,29 @@
                         };
                         
                         if (maze && guideCanvas && guideCtx) {
-                            console.log('Drawing guide view with updated positions');
-                            drawGuideView(maze, playerPosition, monsterPosition);
+                            requestAnimationFrame(() => {
+                                // Get the first (and should be only) player position
+                                const playerPos = Object.values(playerPositions)[0] || null;
+                                const monsterPos = Object.values(monsterPositions)[0] || null;
+                                drawGuideView(maze, playerPos, monsterPos);
+                            });
                         }
-                    } else if (playerRole === 'monster' && message.playerId) {
-                        // Monster sees player position
+
+                        // Check if player reached the end
+                        if (maze && maze.endPosition) {
+                            const distanceToEnd = Math.sqrt(
+                                Math.pow(message.position.x - maze.endPosition.x, 2) +
+                                Math.pow(message.position.z - maze.endPosition.z, 2)
+                            );
+                            if (distanceToEnd < 1.0) { // If player is within 1 unit of the end marker
+                                handlePlayerWin();
+                            }
+                        }
+                    } else if (playerRole === 'monster') {
                         console.log('Monster received player position:', message);
                         if (otherPlayers[message.playerId]) {
+                            // Update player position for monster view
+                            otherPlayers[message.playerId].visible = true;
                             otherPlayers[message.playerId].position.set(
                                 message.position.x,
                                 message.position.y,
@@ -1944,19 +1945,68 @@
                                     message.rotation.z
                                 );
                             }
+                            
+                            // Calculate and update distance to player
+                            const distance = Math.sqrt(
+                                Math.pow(camera.position.x - message.position.x, 2) +
+                                Math.pow(camera.position.z - message.position.z, 2)
+                            );
+                            updateDistanceIndicator(distance);
+
+                            // Check if monster caught the player
+                            if (distance < 1.5) { // If monster is within 1.5 units of the player
+                                handleMonsterWin();
+                            }
+                        } else {
+                            console.log('Creating player representation for monster view');
+                            // Create player representation for monster's view
+                            const playerGeometry = new THREE.Group();
+                            
+                            // Main body - taller and brighter cylinder
+                            const body = new THREE.Mesh(
+                                new THREE.CylinderGeometry(0.4, 0.4, 2.5, 8),
+                                new THREE.MeshPhongMaterial({ 
+                                    color: 0x00ff00,
+                                    emissive: 0x00ff00,
+                                    emissiveIntensity: 0.5
+                                })
+                            );
+                            playerGeometry.add(body);
+                            
+                            // Add glowing ring at the top
+                            const ring = new THREE.Mesh(
+                                new THREE.TorusGeometry(0.5, 0.1, 8, 16),
+                                new THREE.MeshPhongMaterial({
+                                    color: 0xffff00,
+                                    emissive: 0xffff00,
+                                    emissiveIntensity: 0.7
+                                })
+                            );
+                            ring.position.y = 1.5;
+                            ring.rotation.x = Math.PI / 2;
+                            playerGeometry.add(ring);
+                            
+                            otherPlayers[message.playerId] = playerGeometry;
+                            otherPlayers[message.playerId].position.set(
+                                message.position.x,
+                                message.position.y,
+                                message.position.z
+                            );
+                            otherPlayers[message.playerId].visible = true;
+                            scene.add(otherPlayers[message.playerId]);
                         }
                     }
                     break;
 
                 case 'monster_position':
                     if (playerRole === 'guide') {
-                        console.log('Guide received monster position:', message);
                         if (!message.position || typeof message.position.x !== 'number' || typeof message.position.z !== 'number') {
                             console.error('Invalid monster position received:', message.position);
                             return;
                         }
                         
-                        monsterPosition = {
+                        // Store position for this specific monster ID
+                        monsterPositions[message.playerId] = {
                             x: message.position.x,
                             y: message.position.y,
                             z: message.position.z,
@@ -1964,13 +2014,14 @@
                         };
                         
                         if (maze && guideCanvas && guideCtx) {
-                            console.log('Drawing guide view with monster at:', {
-                                x: monsterPosition.x,
-                                z: monsterPosition.z
+                            requestAnimationFrame(() => {
+                                // Get the first (and should be only) player and monster positions
+                                const playerPos = Object.values(playerPositions)[0] || null;
+                                const monsterPos = Object.values(monsterPositions)[0] || null;
+                                drawGuideView(maze, playerPos, monsterPos);
                             });
-                            drawGuideView(maze, playerPosition, monsterPosition);
                         }
-                    } else if (playerRole === 'player' && message.playerId) {
+                    } else if (playerRole === 'player') {
                         // Player sees monster position
                         console.log('Player received monster position:', message);
                         if (otherPlayers[message.playerId]) {
@@ -1985,6 +2036,15 @@
                                     message.rotation.y,
                                     message.rotation.z
                                 );
+                            }
+
+                            // Check if monster caught the player
+                            const distance = Math.sqrt(
+                                Math.pow(camera.position.x - message.position.x, 2) +
+                                Math.pow(camera.position.z - message.position.z, 2)
+                            );
+                            if (distance < 1.5) { // If monster is within 1.5 units of the player
+                                handleMonsterWin();
                             }
                         }
                     }
@@ -2036,6 +2096,76 @@
                     if (this.onPlayerLeft) {
                         this.onPlayerLeft(message.playerId);
                     }
+                    break;
+
+                case 'game_over':
+                    if (!message.winner) return;
+                    
+                    if (message.winner === 'player' && playerRole !== 'player') {
+                        handlePlayerWin();
+                    } else if (message.winner === 'monster' && playerRole !== 'monster') {
+                        handleMonsterWin();
+                    }
+                    
+                    // Cleanup and disconnect after a short delay
+                    setTimeout(() => {
+                        cleanupGame();
+                    }, 2000);
+                    break;
+
+                case 'game_terminated':
+                    console.log('Game terminated by server, winner:', message.winner);
+                    gameStarted = false;
+                    
+                    // Disable all controls
+                    if (controls) {
+                        controls.enabled = false;
+                    }
+                    
+                    // Show appropriate win screen based on winner (for all roles including guide)
+                    const isPlayerWin = message.winner === 'player';
+                    const winScreen = document.createElement('div');
+                    winScreen.style.cssText = `
+                        position: fixed;
+                        top: 50%;
+                        left: 50%;
+                        transform: translate(-50%, -50%);
+                        background: ${isPlayerWin ? 'rgba(0, 255, 0, 0.9)' : 'rgba(255, 0, 0, 0.9)'};
+                        color: white;
+                        padding: 30px;
+                        border-radius: 15px;
+                        text-align: center;
+                        font-size: 24px;
+                        z-index: 1000;
+                        box-shadow: 0 0 20px ${isPlayerWin ? 'rgba(0, 255, 0, 0.5)' : 'rgba(255, 0, 0, 0.5)'};
+                    `;
+                    
+                    // Show different message based on player role
+                    if (playerRole === 'guide') {
+                        winScreen.innerHTML = isPlayerWin ? `
+                            <h2>🎉 Player and Guide Win! 🎉</h2>
+                            <p>You successfully guided the player to safety!</p>
+                        ` : `
+                            <h2>👻 Monster Wins! 👻</h2>
+                            <p>The monster caught the player despite your guidance!</p>
+                        `;
+                    } else {
+                        winScreen.innerHTML = isPlayerWin ? `
+                            <h2>🎉 Player and Guide Win! 🎉</h2>
+                            <p>The player successfully reached the exit!</p>
+                        ` : `
+                            <h2>👻 Monster Wins! 👻</h2>
+                            <p>The monster caught the player!</p>
+                        `;
+                    }
+                    
+                    document.body.appendChild(winScreen);
+                    
+                    // Force page reload after delay (applies to all players including guide)
+                    setTimeout(() => {
+                        console.log(`${playerRole} being disconnected and reloaded`);
+                        window.location.reload();
+                    }, 1500);
                     break;
 
                 default:
@@ -2202,6 +2332,187 @@
             }, 3000);
 
             // TODO: Add game end logic here
+        }
+
+        // Add these new functions for win conditions
+        function handlePlayerWin() {
+            if (!gameStarted) return;
+            gameStarted = false;
+
+            // Disable controls immediately
+            if (controls) {
+                controls.enabled = false;
+            }
+
+            // Create win screen
+            const winScreen = document.createElement('div');
+            winScreen.style.cssText = `
+                position: fixed;
+                top: 50%;
+                left: 50%;
+                transform: translate(-50%, -50%);
+                background: rgba(0, 255, 0, 0.9);
+                color: white;
+                padding: 30px;
+                border-radius: 15px;
+                text-align: center;
+                font-size: 24px;
+                z-index: 1000;
+                box-shadow: 0 0 20px rgba(0, 255, 0, 0.5);
+            `;
+            winScreen.innerHTML = `
+                <h2>🎉 Player and Guide Win! 🎉</h2>
+                <p>The player successfully reached the exit!</p>
+            `;
+            document.body.appendChild(winScreen);
+
+            // Send game over message to server
+            if (multiplayerManager && multiplayerManager.connected) {
+                multiplayerManager.socket.send(JSON.stringify({
+                    type: 'game_over',
+                    winner: 'player',
+                    roomCode: multiplayerManager.roomCode
+                }));
+            }
+
+            // Clean up after a short delay
+            setTimeout(() => {
+                document.body.removeChild(winScreen);
+                window.location.reload(); // Force page reload
+            }, 1500);
+        }
+
+        function handleMonsterWin() {
+            if (!gameStarted) return;
+            gameStarted = false;
+
+            // Disable controls immediately
+            if (controls) {
+                controls.enabled = false;
+            }
+
+            // Create win screen
+            const winScreen = document.createElement('div');
+            winScreen.style.cssText = `
+                position: fixed;
+                top: 50%;
+                left: 50%;
+                transform: translate(-50%, -50%);
+                background: rgba(255, 0, 0, 0.9);
+                color: white;
+                padding: 30px;
+                border-radius: 15px;
+                text-align: center;
+                font-size: 24px;
+                z-index: 1000;
+                box-shadow: 0 0 20px rgba(255, 0, 0, 0.5);
+            `;
+            winScreen.innerHTML = `
+                <h2>👻 Monster Wins! 👻</h2>
+                <p>The monster caught the player!</p>
+            `;
+            document.body.appendChild(winScreen);
+
+            // Send game over message to server
+            if (multiplayerManager && multiplayerManager.connected) {
+                multiplayerManager.socket.send(JSON.stringify({
+                    type: 'game_over',
+                    winner: 'monster',
+                    roomCode: multiplayerManager.roomCode
+                }));
+            }
+
+            // Clean up after a short delay
+            setTimeout(() => {
+                document.body.removeChild(winScreen);
+                window.location.reload(); // Force page reload
+            }, 1500);
+        }
+
+        function cleanupGame() {
+            // Disable all controls and game logic
+            gameStarted = false;
+            if (controls) {
+                controls.enabled = false;
+            }
+
+            // Remove event listeners
+            document.removeEventListener('pointerlockchange', onPointerLockChange);
+            document.removeEventListener('pointerlockerror', onPointerLockError);
+            document.removeEventListener('mousemove', onMouseMove);
+            if (keydownListener) document.removeEventListener('keydown', keydownListener);
+            if (keyupListener) document.removeEventListener('keyup', keyupListener);
+            
+            // Exit pointer lock if active
+            if (document.pointerLockElement) {
+                document.exitPointerLock();
+            }
+
+            // Disconnect from server
+            if (multiplayerManager && multiplayerManager.connected) {
+                multiplayerManager.disconnect();
+            }
+
+            // Clear any animation frames
+            if (window.animationFrameId) {
+                cancelAnimationFrame(window.animationFrameId);
+            }
+
+            // Clear the scene
+            if (scene) {
+                while(scene.children.length > 0) { 
+                    scene.remove(scene.children[0]); 
+                }
+            }
+
+            // Dispose of renderer
+            if (renderer && renderer.domElement) {
+                renderer.domElement.remove();
+                renderer.dispose();
+            }
+
+            // Hide all game-related elements
+            const elementsToHide = [
+                'guideView',
+                'winScreen',
+                'multiplayerMenu',
+                'roomCode',
+                'roomCodeInstructions',
+                'loadingScreen',
+                'errorScreen'
+            ];
+            
+            elementsToHide.forEach(id => {
+                const element = document.getElementById(id);
+                if (element) {
+                    element.style.display = 'none';
+                }
+            });
+
+            // Show start screen
+            const startScreen = document.getElementById('startScreen');
+            if (startScreen) {
+                startScreen.style.display = 'block';
+            }
+
+            // Reset all game variables
+            scene = null;
+            camera = null;
+            renderer = null;
+            controls = null;
+            maze = null;
+            mazeGroup = null;
+            otherPlayers = {};
+            playerRole = null;
+            gameMode = 'single';
+            multiplayerManager = null;
+            playerPositions = {};
+            monsterPositions = {};
+            allPlayersJoined = false;
+            roomCode = null;
+            lastPositionUpdate = 0;
+            lastPlayerPos = null;
+            lastMonsterPos = null;
         }
     </script>
 </body>

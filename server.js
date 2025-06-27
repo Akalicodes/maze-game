@@ -42,13 +42,13 @@ const wss = new WebSocket.Server({
 
 // Start server
 server.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
-    console.log(`WebSocket server is available on ws://localhost:${PORT}/ws`);
+    console.log(`🎮 Maze Game Server running on port ${PORT}`);
+    console.log(`🔗 WebSocket server available on ws://localhost:${PORT}/ws`);
 });
 
 // Handle server errors
 server.on('error', (error) => {
-    console.error('Server error:', error);
+    console.error('❌ Server error:', error.message);
     if (error.code === 'EADDRINUSE') {
         console.error(`Port ${PORT} is already in use. Please stop any other instances of the server.`);
         process.exit(1);
@@ -75,8 +75,6 @@ function handleCreateRoom(ws) {
     const playerId = uuidv4();
     const mazeSeed = Math.floor(Math.random() * 1000000);
     
-    console.log(`Creating new room with code: ${roomCode}, seed: ${mazeSeed}`);
-    
     // Create new room with roles and seed - first player is always the regular player
     const room = {
         host: playerId,
@@ -89,7 +87,7 @@ function handleCreateRoom(ws) {
         lastActivity: Date.now(),
         playerActivity: new Map([[playerId, Date.now()]]),
         gameStarted: false,
-        sharedMazeInstance: null  // Add this to store the shared maze instance
+        sharedMazeInstance: null
     };
     
     rooms.set(roomCode, room);
@@ -109,13 +107,11 @@ function handleCreateRoom(ws) {
         canStart: false
     }));
 
-    console.log(`Room ${roomCode} created by player ${playerId} as player with seed ${mazeSeed}`);
-    console.log(`Active rooms: ${Array.from(rooms.keys()).join(', ')}`);
+    console.log(`🏠 Room ${roomCode} created | Player: ${playerId} | Seed: ${mazeSeed}`);
+    console.log(`📊 Active rooms: ${rooms.size} | Codes: [${Array.from(rooms.keys()).join(', ')}]`);
 }
 
 function handleJoinRoom(ws, roomCode) {
-    console.log(`Attempting to join room: ${roomCode}`);
-    
     const room = rooms.get(roomCode);
     if (!room) {
         ws.send(JSON.stringify({
@@ -152,8 +148,6 @@ function handleJoinRoom(ws, roomCode) {
         }));
         return;
     }
-
-    console.log(`Assigning role ${role} to player ${playerId} in room ${roomCode}`);
     
     // Add player to room
     room.players.set(playerId, ws);
@@ -196,7 +190,7 @@ function handleJoinRoom(ws, roomCode) {
     // Check if room is ready to start
     const newStatus = getRoomStatus(room);
     if (newStatus.isReady) {
-        console.log('Room is ready to start game');
+        console.log(`🎮 Room ${roomCode} ready to start | All roles filled`);
         room.gameStarted = true;
         room.players.forEach((playerWs) => {
             playerWs.send(JSON.stringify({
@@ -221,17 +215,8 @@ function handleJoinRoom(ws, roomCode) {
 }
 
 function handlePlayerMove(ws, data) {
-    console.log('Received position update:', data);
     const room = rooms.get(ws.roomCode);
     if (!room) {
-        console.log('Room not found for position update:', ws.roomCode);
-        return;
-    }
-
-    // Validate the message type matches the sender's role
-    if ((data.type === 'player_position' && ws.role !== 'player') ||
-        (data.type === 'monster_position' && ws.role !== 'monster')) {
-        console.error('Invalid position update type for role:', data.type, ws.role);
         return;
     }
 
@@ -257,9 +242,9 @@ function handlePlayerMove(ws, data) {
             }));
         }
         // Monster sees player positions
-        else if (receiverRole === 'monster' && data.type === 'player_position') {
+        else if (receiverRole === 'monster' && ws.role === 'player') {
             playerWs.send(JSON.stringify({
-                type: data.type,
+                type: 'player_position',
                 position: data.position,
                 rotation: data.rotation,
                 playerId: ws.playerId,
@@ -267,9 +252,9 @@ function handlePlayerMove(ws, data) {
             }));
         }
         // Player sees monster positions
-        else if (receiverRole === 'player' && data.type === 'monster_position') {
+        else if (receiverRole === 'player' && ws.role === 'monster') {
             playerWs.send(JSON.stringify({
-                type: data.type,
+                type: 'monster_position',
                 position: data.position,
                 rotation: data.rotation,
                 playerId: ws.playerId,
@@ -338,8 +323,7 @@ function handleDisconnect(ws) {
         rooms.delete(ws.roomCode);
     }
 
-    console.log(`Player ${ws.playerId} disconnected from room ${ws.roomCode}`);
-    console.log(`Room status: ${status.currentPlayers} players, roles: ${status.availableRoles.join(', ')}`);
+    console.log(`👋 Player disconnected | Room: ${ws.roomCode} | Players: ${status.currentPlayers} | Roles: [${status.availableRoles.join(', ')}]`);
 }
 
 function handleMazeData(ws, data) {
@@ -399,6 +383,9 @@ function handleMessage(ws, data) {
                 break;
             case 'join_room':
                 handleJoinRoom(ws, data.roomCode);
+                break;
+            case 'game_over':
+                handleGameOver(ws, data);
                 break;
             case 'restore_session':
                 handleRestoreSession(ws, data);
@@ -495,6 +482,46 @@ function handlePing(ws) {
     if (ws.roomCode) {
         updateRoomActivity(ws.roomCode, ws.playerId);
     }
+}
+
+function handleGameOver(ws, data) {
+    const room = rooms.get(ws.roomCode);
+    if (!room) return;
+
+    console.log(`Game over in room ${ws.roomCode}, winner: ${data.winner}`);
+
+    // Notify all players in the room (including guide, player, and monster)
+    room.players.forEach((playerWs, playerId) => {
+        const role = room.roles.get(playerId);
+        console.log(`Notifying ${role} (${playerId}) of game termination`);
+        
+        try {
+            playerWs.send(JSON.stringify({
+                type: 'game_terminated',
+                winner: data.winner
+            }));
+        } catch (error) {
+            console.error(`Error sending game over message to ${role}:`, error);
+        }
+    });
+
+    // Wait a moment for messages to be sent, then force disconnect all players
+    setTimeout(() => {
+        room.players.forEach((playerWs, playerId) => {
+            const role = room.roles.get(playerId);
+            console.log(`Force disconnecting ${role} (${playerId})`);
+            
+            try {
+                playerWs.close();
+            } catch (error) {
+                console.error(`Error closing connection for ${role}:`, error);
+            }
+        });
+
+        // Delete the room
+        rooms.delete(ws.roomCode);
+        console.log(`Room ${ws.roomCode} terminated and deleted`);
+    }, 100); // Small delay to ensure messages are sent
 }
 
 // Handle new WebSocket connections
