@@ -2494,31 +2494,17 @@
             console.log('🔥🔥🔥 WALL CHANGE HANDLER CALLED! 🔥🔥🔥', data);
             console.log('🔥🔥🔥 FUNCTION DEFINITELY EXECUTING! Call #' + handleWallChangedCallCount + ' 🔥🔥🔥');
             
-            // Update the page title to show call count
+            // Update the page title to show call count (ALL PLAYERS can see this)
             document.title = `Maze Game - Wall Handler Called ${handleWallChangedCallCount} times`;
             
-            // IMMEDIATELY add a test cube to see if the function is working at all
-            if (scene) {
-                const testCube = new THREE.Mesh(
-                    new THREE.BoxGeometry(3, 3, 3),
-                    new THREE.MeshBasicMaterial({ color: 0xff00ff })
-                );
-                testCube.position.set(Math.random() * 10 - 5, 3, Math.random() * 10 - 5);
-                scene.add(testCube);
-                console.log('🔥🔥🔥 ADDED TEST CUBE TO PROVE FUNCTION IS WORKING! 🔥🔥🔥');
-                
-                // Also show a visible message on screen
-                if (playerRole === 'architect') {
-                    showArchitectMessage('handleWallChanged called! Check for magenta cube!', true);
-                }
-            } else {
-                console.error('🔥🔥🔥 NO SCENE AVAILABLE IN handleWallChanged! 🔥🔥🔥');
-                
-                // Show error message on screen
-                if (playerRole === 'architect') {
-                    showArchitectMessage('ERROR: No scene available!', false);
-                }
-            }
+            // Flash the background briefly for ALL PLAYERS to see
+            document.body.style.backgroundColor = '#ff0080';
+            setTimeout(() => {
+                document.body.style.backgroundColor = '#000';
+            }, 200);
+            
+            // Log what role is receiving this
+            console.log('🔥 handleWallChanged called for role:', playerRole);
             
             // Basic validation first
             if (!data) {
@@ -2564,40 +2550,57 @@
             // Update ALL views that need to reflect the maze changes
             
             // 1. Redraw the guide view if visible (for guide and architect)
-            if ((playerRole === 'guide' || playerRole === 'architect') && window.guideViewConfig && guideCanvas) {
-                console.log('🏗️ Redrawing guide view for', playerRole);
+            if ((playerRole === 'guide' || playerRole === 'architect') && window.guideViewConfig && guideCanvas && guideCtx) {
+                console.log('🏗️ FORCE REDRAWING 2D VIEW for', playerRole);
                 console.log('🏗️ Guide canvas dimensions:', guideCanvas.width, 'x', guideCanvas.height);
                 
-                // Force immediate redraw
-                setTimeout(() => {
+                // IMMEDIATELY redraw with visible changes
+                try {
+                    // Flash the canvas border to show it's updating
+                    guideCanvas.style.border = '5px solid #ff0000';
+                    setTimeout(() => {
+                        guideCanvas.style.border = '1px solid #333';
+                    }, 500);
+                    
                     drawGuideView(maze, null, null);
-                    console.log('🏗️ Guide view redrawn');
-                }, 50); // Small delay to ensure maze data is updated
+                    console.log('🏗️ 2D VIEW REDRAWN for', playerRole);
+                } catch (error) {
+                    console.error('🏗️ Error redrawing 2D view:', error);
+                }
             } else {
-                console.log('🏗️ Not redrawing guide view:', {
-                    playerRole,
+                console.log('🏗️ CANNOT redraw 2D view for', playerRole, ':', {
+                    isGuideOrArchitect: (playerRole === 'guide' || playerRole === 'architect'),
                     hasConfig: !!window.guideViewConfig,
-                    hasCanvas: !!guideCanvas
+                    hasCanvas: !!guideCanvas,
+                    hasCtx: !!guideCtx
                 });
             }
             
             // 2. For ALL players in 3D mode, update the visual walls
-            if (mazeGroup && scene) {
-                console.log('🏗️ Updating 3D wall visual');
+            if (mazeGroup && scene && (playerRole === 'player' || playerRole === 'monster')) {
+                console.log('🏗️ FORCE UPDATING 3D WALLS for', playerRole);
                 
-                // Add a bright magenta test cube to verify coordinate system
-                const testCube = new THREE.Mesh(
-                    new THREE.BoxGeometry(2, 6, 2),
-                    new THREE.MeshBasicMaterial({ color: 0xff00ff })
+                // Add a bright indicator cube first
+                const indicatorCube = new THREE.Mesh(
+                    new THREE.BoxGeometry(2, 8, 2),
+                    new THREE.MeshBasicMaterial({ color: 0x00ff00 })
                 );
-                testCube.position.set(data.gridX * maze.cellSize, 4, data.gridZ * maze.cellSize);
-                scene.add(testCube);
-                console.log('🏗️ Added MAGENTA test cube at calculated position:', testCube.position);
+                indicatorCube.position.set(data.gridX * maze.cellSize, 4, data.gridZ * maze.cellSize);
+                scene.add(indicatorCube);
+                
+                // Remove indicator after 2 seconds
+                setTimeout(() => {
+                    scene.remove(indicatorCube);
+                }, 2000);
                 
                 updateWallVisual(data.gridX, data.gridZ, data.action);
+                console.log('🏗️ 3D WALLS UPDATED for', playerRole);
             } else {
-                console.log('🏗️ No mazeGroup or scene available for 3D update');
-                console.log('🏗️ mazeGroup:', !!mazeGroup, 'scene:', !!scene);
+                console.log('🏗️ CANNOT update 3D walls for', playerRole, ':', {
+                    hasMazeGroup: !!mazeGroup,
+                    hasScene: !!scene,
+                    is3DRole: (playerRole === 'player' || playerRole === 'monster')
+                });
             }
             
             // 3. Update any other views that might be affected (e.g., minimap, architect view)
