@@ -2142,11 +2142,26 @@
         function handleArchitectClick(event) {
             if (playerRole !== 'architect') return;
             
-            console.log('🏗️ Architect left click detected at:', event.clientX, event.clientY);
+            console.log('🔥🔥🔥 ARCHITECT CLICK DETECTED! 🔥🔥🔥');
+            console.log('🏗️ Click details:', {
+                clientX: event.clientX,
+                clientY: event.clientY,
+                playerRole: playerRole,
+                canvasExists: !!guideCanvas
+            });
+            
+            // Flash screen to show click was detected
+            document.body.style.backgroundColor = '#ffff00';
+            setTimeout(() => {
+                document.body.style.backgroundColor = '#000';
+            }, 100);
+            
             event.preventDefault();
             const rect = guideCanvas.getBoundingClientRect();
             const canvasX = event.clientX - rect.left;
             const canvasY = event.clientY - rect.top;
+            
+            console.log('🏗️ Canvas coordinates:', {canvasX, canvasY, rect});
             
             performArchitectAction(canvasX, canvasY, 'add');
         }
@@ -2154,12 +2169,26 @@
         function handleArchitectRightClick(event) {
             if (playerRole !== 'architect') return;
             
-            console.log('🏗️ Architect right click detected at:', event.clientX, event.clientY);
+            console.log('🔥🔥🔥 ARCHITECT RIGHT CLICK DETECTED! 🔥🔥🔥');
+            console.log('🏗️ Right click details:', {
+                clientX: event.clientX,
+                clientY: event.clientY,
+                playerRole: playerRole
+            });
+            
+            // Flash screen to show right click was detected
+            document.body.style.backgroundColor = '#ff8800';
+            setTimeout(() => {
+                document.body.style.backgroundColor = '#000';
+            }, 100);
+            
             event.preventDefault();
             event.stopPropagation();
             const rect = guideCanvas.getBoundingClientRect();
             const canvasX = event.clientX - rect.left;
             const canvasY = event.clientY - rect.top;
+            
+            console.log('🏗️ Canvas coordinates:', {canvasX, canvasY, rect});
             
             performArchitectAction(canvasX, canvasY, 'remove');
             return false; // Extra prevention of context menu
@@ -2218,16 +2247,30 @@
                     action: action
                 };
                 
-                console.log('🏗️ Sending message to server:', message);
+                console.log('🔥🔥🔥 SENDING MESSAGE TO SERVER! 🔥🔥🔥', message);
+                
+                // Flash screen to show message being sent
+                document.body.style.backgroundColor = '#00ffff';
+                setTimeout(() => {
+                    document.body.style.backgroundColor = '#000';
+                }, 150);
+                
                 multiplayerManager.socket.send(JSON.stringify(message));
                 
-                console.log(`🏗️ Sent ${action} wall request at world (${worldX}, ${worldZ}) grid (${gridX}, ${gridZ})`);
+                console.log(`🔥🔥🔥 MESSAGE SENT SUCCESSFULLY! ${action} wall request at world (${worldX}, ${worldZ}) grid (${gridX}, ${gridZ}) 🔥🔥🔥`);
             } else {
-                console.log('🏗️ Cannot send message - connection not ready:', {
+                console.log('🔥🔥🔥 CANNOT SEND MESSAGE - CONNECTION NOT READY! 🔥🔥🔥', {
                     multiplayerManager: !!multiplayerManager,
                     socket: !!multiplayerManager?.socket,
-                    readyState: multiplayerManager?.socket?.readyState
+                    readyState: multiplayerManager?.socket?.readyState,
+                    WebSocket_OPEN: WebSocket.OPEN
                 });
+                
+                // Flash red screen to show connection error
+                document.body.style.backgroundColor = '#ff0000';
+                setTimeout(() => {
+                    document.body.style.backgroundColor = '#000';
+                }, 500);
             }
         }
 
@@ -2325,6 +2368,20 @@
         window.showArchitectError = showArchitectError;
         window.showArchitectMessage = showArchitectMessage;
         console.log('🔥🔥🔥 FUNCTIONS ATTACHED! handleWallChanged type:', typeof window.handleWallChanged, '🔥🔥🔥');
+        
+        // Test function to manually trigger handleWallChanged
+        window.testHandleWallChanged = function() {
+            console.log('🧪 TESTING handleWallChanged manually...');
+            const testData = {
+                x: 15,
+                z: 15,
+                gridX: 5,
+                gridZ: 5,
+                action: 'add',
+                test: true
+            };
+            handleWallChanged(testData);
+        };
         
         // Add a simple test function to check if Three.js is working
         window.testAddCube = function() {
