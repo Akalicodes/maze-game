@@ -362,7 +362,7 @@
         <h2 style="color: #4CAF50; font-size: 32px; margin-bottom: 20px; text-shadow: 0 0 10px rgba(76, 175, 80, 0.5);">🎮 Waiting for Players</h2>
         <div class="spinner"></div>
         <div id="waitingMessage" style="font-size: 20px; margin: 20px 0;">Waiting for players to join...</div>
-        <div id="playerCount" style="font-size: 18px; color: #4CAF50;">Players joined: 1/3</div>
+                        <div id="playerCount" style="font-size: 18px; color: #4CAF50;">Players joined: 1/4</div>
         <div style="margin-top: 30px; text-align: center;">
             <div style="font-size: 18px; color: #ccc; margin-bottom: 10px;">Room Code:</div>
             <div id="waitingRoomCode" style="font-family: monospace; color: #4CAF50; cursor: pointer; padding: 15px 25px; border: 3px solid #4CAF50; border-radius: 10px; font-size: 32px; font-weight: bold; letter-spacing: 4px; background: rgba(76, 175, 80, 0.1); transition: all 0.3s; display: inline-block;" onclick="copyRoomCode(this)" title="Click to copy" onmouseover="this.style.background='rgba(76, 175, 80, 0.2)'" onmouseout="this.style.background='rgba(76, 175, 80, 0.1)'"></div>
@@ -400,15 +400,12 @@
     <div id="guideView" style="display: none;">
         <canvas id="guideCanvas"></canvas>
         <div id="guideInstructions">
-            Guide View - Help the player reach the green exit!
-            <br>
-            Player position is shown as a blue square
-            <br>
-            Monster position is shown as a red diamond
-            <br>
-            Exit is shown as a green square
+            <span id="roleTitle">Guide View</span>
         </div>
     </div>
+
+    <!-- Temporary debug test button -->
+    <button id="testBroadcastBtn" onclick="testBroadcast()" style="position: fixed; top: 10px; right: 10px; z-index: 9999; background: #ff6b6b; color: white; padding: 10px; border: none; border-radius: 5px; cursor: pointer; font-weight: bold;">🧪 Test Broadcast</button>
 
     <script>
         let scene, camera, renderer, controls;
@@ -416,16 +413,20 @@
         const MAZE_SIZE = { width: 25, height: 25 };
         let keydownListener, keyupListener;
         let textureLoader;
+        let architectWallMaterial = null; // Global material for architect walls
+        let handleWallChangedCallCount = 0; // Track how many times handleWallChanged is called
         let gameMode = 'single';
         let multiplayerManager = null;
         let otherPlayers = {};
         let gameStarted = false;
         let playerRole = null;
+        let gameTimer = null;
+        let gameTimeLimit = 300000; // 5 minutes in milliseconds
         let guideCanvas, guideCtx;
         let playerPositions = {}; // Track positions by player ID
         let monsterPositions = {}; // Track monster positions by player ID
         let allPlayersJoined = false;
-        let requiredPlayers = 3;
+        let requiredPlayers = 4;
         let roomCode = null;
         let lastPositionUpdate = 0;
         const POSITION_UPDATE_INTERVAL = 100; // Throttle position updates for better performance
@@ -501,8 +502,8 @@
                 // Show waiting screen
                 document.getElementById('waitingScreen').style.display = 'block';
                 document.getElementById('waitingRoomCode').textContent = roomCode;
-                document.getElementById('playerCount').textContent = 'Players joined: 1/3';
-                document.getElementById('waitingMessage').textContent = 'Waiting for 2 more players to join...';
+                document.getElementById('playerCount').textContent = 'Players joined: 1/4';
+                document.getElementById('waitingMessage').textContent = 'Waiting for 3 more players to join...';
                 
                 // Set the game mode but don't start yet
                 gameMode = 'multiplayer';
@@ -532,7 +533,7 @@
                 
                 // Update player count
                 const currentPlayers = Object.keys(otherPlayers).length + 2; // +2 because we're counting this new player
-                document.getElementById('playerCount').textContent = `Players joined: ${currentPlayers}/3`;
+                document.getElementById('playerCount').textContent = `Players joined: ${currentPlayers}/4`;
                 
                 const playersNeeded = requiredPlayers - currentPlayers;
                 if (playersNeeded > 0) {
@@ -545,13 +546,13 @@
                     document.getElementById('waitingMessage').textContent = 'All players joined! Assigning roles...';
                 }
                 
-                if (!otherPlayers[playerId] && (playerRole === 'player' || playerRole === 'monster')) {
-                    console.log('Creating representation for player:', playerId, 'with role:', role);
+                if (!otherPlayers[playerId] && (playerRole === 'player' || playerRole === 'monster' || playerRole === 'architect')) {
+                    console.log('Creating representation for player:', playerId, 'with role:', role, 'for viewer:', playerRole);
                     
                     // Create a more visible representation for players
                     let playerMesh;
                     if (role === 'monster') {
-                        // Monster representation for player's view
+                        // Monster representation - red cylinder for all viewers
                         playerMesh = new THREE.Mesh(
                             new THREE.CylinderGeometry(0.3, 0.3, 2, 8),
                             new THREE.MeshPhongMaterial({ 
@@ -560,8 +561,8 @@
                                 emissiveIntensity: 0.5
                             })
                         );
-                    } else if (role === 'player' && playerRole === 'monster') {
-                        // Player representation for monster's view - bright green cylinder
+                    } else if (role === 'player') {
+                        // Player representation - bright green cylinder for all viewers
                         const playerGeometry = new THREE.Group();
                         
                         // Main body - taller and brighter cylinder
@@ -596,7 +597,7 @@
                         otherPlayers[playerId].position.set(0, 1, 0);
                         otherPlayers[playerId].visible = true;
                         scene.add(otherPlayers[playerId]);
-                        console.log('Added player representation to scene:', playerId);
+                        console.log('Added player representation to scene for', playerRole, ':', playerId);
                     }
                 }
             };
@@ -620,6 +621,9 @@
                         break;
                     case 'guide':
                         description = 'Help the player reach the exit using your top-down 2D view. You can see the entire maze layout and all player positions.';
+                        break;
+                    case 'architect':
+                        description = 'You are the Architect! You have a top-down 2D view of the entire maze. Click on the maze to add/remove walls and create chaos! Your goal is to waste time so the player doesn\'t escape. But be careful - you have a 5-second cooldown between wall changes, and you can\'t completely block the path to the exit.';
                         break;
                     case 'monster':
                         description = 'Hunt the player in first-person view! Use WASD to move and mouse to look around. Catch the player before they escape!';
@@ -661,12 +665,26 @@
                     // Force game start based on role
                     console.log('🎮 Starting game for role:', playerRole);
                     if (playerRole === 'guide') {
-                        console.log('🎮 Starting GUIDE view');
+                        console.log('🎮 Starting GUIDE view (2D only)');
                         initGuideView(maze);
+                    } else if (playerRole === 'architect') {
+                        console.log('🔥🔥🔥 Starting ARCHITECT view (2D ONLY)! 🔥🔥🔥');
+                        // Architect gets pure 2D view like guide
+                        initGuideView(maze);
+                        
+                        // Start game timer if multiplayer
+                        if (gameMode === 'multiplayer') {
+                            startGameTimer();
+                        }
                     } else if (playerRole === 'player' || playerRole === 'monster') {
                         console.log('🎮 Starting 3D view for:', playerRole);
                         // Always call init(true) to ensure fresh initialization
                         init(true);
+                        
+                        // Start game timer if multiplayer
+                        if (gameMode === 'multiplayer') {
+                            startGameTimer();
+                        }
                     } else {
                         console.log('🎮 Unknown role:', playerRole);
                     }
@@ -822,19 +840,19 @@
         }
 
         function init(shouldStartAnimation = true) {
-            console.log('🎬 INIT CALLED: mode=', gameMode, 'role=', playerRole, 'shouldStartAnimation=', shouldStartAnimation, 'mazeExists=', !!maze);
+            console.log('🔥🔥🔥 INIT CALLED: mode=', gameMode, 'role=', playerRole, 'shouldStartAnimation=', shouldStartAnimation, 'mazeExists=', !!maze);
             
             try {
-                // Only guide gets the 2D view
-                if (playerRole === 'guide') {
-                    console.log('🎮 Initializing GUIDE view...');
+                // Guide and architect both get only 2D view
+                if (playerRole === 'guide' || playerRole === 'architect') {
+                    console.log(`🎮 Initializing ${playerRole.toUpperCase()} view (2D only)...`);
                     // Initialize guide view
                     document.body.style.cursor = 'default';
                     if (maze) {
-                        console.log('🗺️ Maze data available for guide, calling initGuideView');
+                        console.log('🗺️ Maze data available for 2D view, calling initGuideView');
                         initGuideView(maze);
                     } else {
-                        console.error('❌ No maze data available for guide view');
+                        console.error('❌ No maze data available for 2D view');
                         document.body.innerHTML = '<div style="color: red; text-align: center; margin-top: 50px;">Error: No maze data available. Please try refreshing the page.</div>';
                     }
                     return;
@@ -865,11 +883,24 @@
                 renderer.domElement.style.zIndex = '1';
                 renderer.domElement.style.display = 'block';
                 
+                // For architect, make the canvas slightly transparent so they can see both views
+                if (playerRole === 'architect') {
+                    renderer.domElement.style.opacity = '0.8';
+                    renderer.domElement.style.zIndex = '10';
+                    console.log('🎮 Architect renderer canvas made semi-transparent');
+                }
+                
                 document.body.appendChild(renderer.domElement);
                 console.log('🖥️ Renderer canvas added to DOM');
                 
                 // Create first-person camera
                 camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+                
+                // Make scene, camera, and renderer globally accessible for wall updates
+                window.scene = scene;
+                window.camera = camera;
+                window.renderer = renderer;
+                console.log('🌍 Made scene, camera, and renderer globally accessible');
                 
                 // Load textures
                 textureLoader = new THREE.TextureLoader();
@@ -941,7 +972,7 @@
                     document.body.appendChild(playerInstructions);
                 }
 
-                // Make sure guide view is hidden for both player and monster
+                // Hide guide view for all 3D roles (player, monster only, not architect)
                 const guideView = document.getElementById('guideView');
                 if (guideView) {
                     guideView.style.display = 'none';
@@ -960,15 +991,21 @@
                     gameStarted = true;
                     animate();
                     
-                    // Request pointer lock for both player and monster
-                    renderer.domElement.requestPointerLock();
-                    console.log('🎬 Animation started and pointer lock requested');
+                    // Request pointer lock for player and monster, but not architect
+                    if (playerRole !== 'architect') {
+                        renderer.domElement.requestPointerLock();
+                        console.log('🎬 Animation started and pointer lock requested');
+                    } else {
+                        console.log('🎬 Animation started for architect (no pointer lock)');
+                    }
                 } else {
                     gameStarted = false;
                     console.log('🎬 Game initialized but not started - waiting for all players');
                 }
                 
-                console.log('Game initialized in mode:', gameMode, 'role:', playerRole, 'with first-person view');
+                if (playerRole !== 'architect') {
+                    console.log('Game initialized in mode:', gameMode, 'role:', playerRole, 'with first-person view');
+                }
             } catch (error) {
                 console.error('❌ Error initializing game:', error);
                 // Show detailed error information
@@ -1068,6 +1105,23 @@
                 depthTest: true
             });
 
+            // Create architect wall material for reuse
+            const architectWallTexture = textureLoader.load('wall.jpg');
+            architectWallTexture.wrapS = architectWallTexture.wrapT = THREE.RepeatWrapping;
+            architectWallTexture.repeat.set(1, 1);
+            
+            architectWallMaterial = new THREE.MeshPhongMaterial({
+                map: architectWallTexture,
+                color: 0xffdddd, // Slightly reddish tint for architect walls
+                specular: 0x222222,
+                shininess: 10,
+                transparent: false,
+                opacity: 1.0,
+                side: THREE.FrontSide,
+                depthWrite: true,
+                depthTest: true
+            });
+
             // Clear existing walls array
             maze.wallPositions = [];
 
@@ -1077,6 +1131,7 @@
                 wall.castShadow = true;
                 wall.receiveShadow = true;
                 wall.matrixAutoUpdate = false; // Optimize performance
+                wall.userData = { gridX: x, gridZ: z }; // Store grid coordinates for architect functionality
                 wall.updateMatrix();
                 mazeGroup.add(wall);
                 
@@ -1221,7 +1276,7 @@
         }
 
         function setupControls() {
-            const moveSpeed = playerRole === 'monster' ? 0.1 : 0.15;
+            const moveSpeed = playerRole === 'monster' ? 0.1 : (playerRole === 'architect' ? 0.2 : 0.15);
             const turnSpeed = 0.06;
             let isPointerLocked = false;
             
@@ -1245,6 +1300,7 @@
                 if (isPointerLocked && gameStarted && (playerRole === 'player' || playerRole === 'monster')) {
                     camera.rotation.y -= event.movementX * 0.002;
                 }
+                // Architect doesn't need mouse look - they have fixed overhead view
             }
 
             function onPointerLockChange() {
@@ -1260,9 +1316,24 @@
             document.addEventListener('mousemove', onMouseMove);
 
             if (renderer && renderer.domElement) {
-                renderer.domElement.addEventListener('click', () => {
-                    if (!isPointerLocked) {
-                        renderer.domElement.requestPointerLock();
+                renderer.domElement.addEventListener('click', (event) => {
+                    // Handle architect wall placement in 3D view
+                    if (playerRole === 'architect') {
+                        handleArchitect3DClick(event);
+                    } else {
+                        // Only request pointer lock for player and monster, not architect
+                        if (!isPointerLocked && (playerRole === 'player' || playerRole === 'monster')) {
+                            renderer.domElement.requestPointerLock();
+                        }
+                    }
+                });
+                
+                // Handle right-click for wall removal
+                renderer.domElement.addEventListener('contextmenu', (event) => {
+                    if (playerRole === 'architect') {
+                        event.preventDefault();
+                        handleArchitect3DRightClick(event);
+                        return false;
                     }
                 });
             }
@@ -1326,50 +1397,50 @@
                 const newPosition = camera.position.clone();
                 const oldPosition = camera.position.clone();
 
-                // Calculate movement vector
+                // First-person movement for player and monster (WITH collision detection)
                 let moveVector = new THREE.Vector3(0, 0, 0);
-                if (keys.forward) {
-                    moveVector.x -= Math.sin(camera.rotation.y) * moveSpeed;
-                    moveVector.z -= Math.cos(camera.rotation.y) * moveSpeed;
-                }
-                if (keys.backward) {
-                    moveVector.x += Math.sin(camera.rotation.y) * moveSpeed;
-                    moveVector.z += Math.cos(camera.rotation.y) * moveSpeed;
-                }
-                if (keys.left) {
-                    camera.rotation.y += turnSpeed;
-                }
-                if (keys.right) {
-                    camera.rotation.y -= turnSpeed;
-                }
-
-                // Apply movement and check collision
-                if (moveVector.length() > 0) {
-                    // Try to move to new position
-                    const targetPos = {
-                        x: newPosition.x + moveVector.x,
-                        z: newPosition.z + moveVector.z
-                    };
-                    
-                    // Check collision at target position
-                    const collision = checkCollision(targetPos);
-                    
-                    // If there's a collision, try to slide along walls
-                    if (collision.x || collision.z) {
-                        if (!collision.x) newPosition.x = targetPos.x;
-                        if (!collision.z) newPosition.z = targetPos.z;
-                        
-                        // Apply sliding motion if available
-                        if (collision.slideX || collision.slideZ) {
-                            newPosition.x += collision.slideX * 0.5;
-                            newPosition.z += collision.slideZ * 0.5;
-                        }
-                    } else {
-                        // No collision, move freely
-                        newPosition.x = targetPos.x;
-                        newPosition.z = targetPos.z;
+                    if (keys.forward) {
+                        moveVector.x -= Math.sin(camera.rotation.y) * moveSpeed;
+                        moveVector.z -= Math.cos(camera.rotation.y) * moveSpeed;
                     }
-                }
+                    if (keys.backward) {
+                        moveVector.x += Math.sin(camera.rotation.y) * moveSpeed;
+                        moveVector.z += Math.cos(camera.rotation.y) * moveSpeed;
+                    }
+                    if (keys.left) {
+                        camera.rotation.y += turnSpeed;
+                    }
+                    if (keys.right) {
+                        camera.rotation.y -= turnSpeed;
+                    }
+                    
+                    // Apply movement and check collision for non-architects
+                    if (moveVector.length() > 0) {
+                        // Try to move to new position
+                        const targetPos = {
+                            x: newPosition.x + moveVector.x,
+                            z: newPosition.z + moveVector.z
+                        };
+                        
+                        // Check collision at target position
+                        const collision = checkCollision(targetPos);
+                        
+                        // If there's a collision, try to slide along walls
+                        if (collision.x || collision.z) {
+                            if (!collision.x) newPosition.x = targetPos.x;
+                            if (!collision.z) newPosition.z = targetPos.z;
+                            
+                            // Apply sliding motion if available
+                            if (collision.slideX || collision.slideZ) {
+                                newPosition.x += collision.slideX * 0.5;
+                                newPosition.z += collision.slideZ * 0.5;
+                            }
+                        } else {
+                            // No collision, move freely
+                            newPosition.x = targetPos.x;
+                            newPosition.z = targetPos.z;
+                        }
+                    }
 
                 // Update position and send update if changed
                 camera.position.copy(newPosition);
@@ -1517,6 +1588,9 @@
                     case 'guide':
                         description = 'Help the player reach the exit using your top-down 2D view. You can see the entire maze layout and all player positions.';
                         break;
+                    case 'architect':
+                        description = 'You are the Architect! You have a top-down 2D view of the entire maze. Click on the maze to add/remove walls and create chaos! Your goal is to waste time so the player doesn\'t escape. But be careful - you have a 5-second cooldown between wall changes, and you can\'t completely block the path to the exit.';
+                        break;
                     case 'monster':
                         description = 'Hunt the player in first-person view! Use WASD to move and mouse to look around. Catch the player before they escape!';
                         break;
@@ -1556,7 +1630,11 @@
                     // Force game start based on role
                     console.log('🎮 Starting game for role:', playerRole);
                     if (playerRole === 'guide') {
-                        console.log('🎮 Starting GUIDE view');
+                        console.log('🎮 Starting GUIDE view (2D only)');
+                        initGuideView(maze);
+                    } else if (playerRole === 'architect') {
+                        console.log('🔥🔥🔥 Starting ARCHITECT view (2D only)! 🔥🔥🔥');
+                        // Architect gets 2D view with wall editing
                         initGuideView(maze);
                     } else if (playerRole === 'player' || playerRole === 'monster') {
                         console.log('🎮 Starting 3D view for:', playerRole);
@@ -1730,6 +1808,16 @@
                 if (!mazeData) throw new Error('No maze data provided');
                 console.log('🗺️ Initializing guide view with maze data:', mazeData);
 
+                // Update role title based on actual player role
+                const roleTitleElement = document.getElementById('roleTitle');
+                if (roleTitleElement) {
+                    if (playerRole === 'architect') {
+                        roleTitleElement.textContent = 'Architect View';
+                    } else {
+                        roleTitleElement.textContent = 'Guide View';
+                    }
+                }
+
                 // Clean up
                 if (renderer?.domElement?.parentNode) {
                     renderer.domElement.parentNode.removeChild(renderer.domElement);
@@ -1788,6 +1876,17 @@
 
                 // Initial draw
                 drawGuideView(mazeData, null, null);
+                
+                // Add architect-specific functionality
+                if (playerRole === 'architect') {
+                    setupArchitectControls();
+                }
+                
+                // Start game timer if multiplayer
+                if (gameMode === 'multiplayer') {
+                    startGameTimer();
+                }
+                
                 gameStarted = true;
 
             } catch (error) {
@@ -1943,6 +2042,833 @@
             // Copy the offscreen canvas to the visible canvas
             guideCtx.clearRect(0, 0, guideCanvas.width, guideCanvas.height);
             guideCtx.drawImage(offscreenCanvas, 0, 0);
+        }
+
+        function setupArchitectControls() {
+            // Create cooldown indicator
+            const cooldownIndicator = document.createElement('div');
+            cooldownIndicator.id = 'architectCooldown';
+            cooldownIndicator.style.cssText = `
+                position: fixed;
+                top: 20px;
+                left: 50%;
+                transform: translateX(-50%);
+                background: rgba(255, 69, 0, 0.9);
+                color: white;
+                padding: 10px 20px;
+                border-radius: 20px;
+                font-size: 18px;
+                font-weight: bold;
+                z-index: 10000;
+                display: none;
+                text-shadow: 0 0 5px rgba(0, 0, 0, 0.5);
+                box-shadow: 0 4px 15px rgba(255, 69, 0, 0.4);
+            `;
+            document.body.appendChild(cooldownIndicator);
+            
+            // Create instructions (positioned to not cover maze)
+            const instructions = document.createElement('div');
+            instructions.id = 'architectInstructions';
+            instructions.style.cssText = `
+                position: fixed;
+                top: 70px;
+                left: 20px;
+                background: rgba(255, 69, 0, 0.95);
+                color: white;
+                padding: 15px 20px;
+                border-radius: 10px;
+                font-size: 16px;
+                z-index: 10000;
+                border: 3px solid #FFD700;
+                box-shadow: 0 0 25px rgba(255, 215, 0, 0.5);
+                max-width: 300px;
+                animation: architectPulse 2s infinite;
+                font-weight: bold;
+                text-shadow: 0 0 5px rgba(0, 0, 0, 0.5);
+            `;
+            instructions.innerHTML = `
+                <strong>🏗️ ARCHITECT MODE ACTIVE</strong><br>
+                <span style="font-size: 14px; color: #FFD700;">
+                📍 CLICK ON THE 2D MAZE VIEW:<br>
+                🖱️ Left Click: Add Wall<br>
+                🖱️ Right Click: Remove Wall<br>
+                ⏱️ 5-second cooldown between changes
+                </span>
+            `;
+            
+            // Add pulsing animation
+            if (!document.getElementById('architect-pulse-style')) {
+                const style = document.createElement('style');
+                style.id = 'architect-pulse-style';
+                style.textContent = `
+                    @keyframes architectPulse {
+                        0% { box-shadow: 0 0 25px rgba(255, 215, 0, 0.5); }
+                        50% { box-shadow: 0 0 35px rgba(255, 215, 0, 0.8); }
+                        100% { box-shadow: 0 0 25px rgba(255, 215, 0, 0.5); }
+                    }
+                `;
+                document.head.appendChild(style);
+            }
+            
+            document.body.appendChild(instructions);
+            
+            // Add click handlers to guide canvas
+            console.log('🏗️ Setting up architect controls for canvas:', guideCanvas);
+            guideCanvas.addEventListener('click', handleArchitectClick);
+            guideCanvas.addEventListener('contextmenu', handleArchitectRightClick);
+            
+            // Add visual feedback for architect interactions
+            guideCanvas.style.cursor = 'crosshair';
+            guideCanvas.style.border = '3px solid #FF4500';
+            guideCanvas.style.boxShadow = '0 0 15px rgba(255, 69, 0, 0.5)';
+            
+            // Add hover effects
+            guideCanvas.addEventListener('mouseenter', () => {
+                guideCanvas.style.boxShadow = '0 0 25px rgba(255, 69, 0, 0.8)';
+            });
+            
+            guideCanvas.addEventListener('mouseleave', () => {
+                guideCanvas.style.boxShadow = '0 0 15px rgba(255, 69, 0, 0.5)';
+            });
+            
+            // Add a blinking reminder
+            let reminderCount = 0;
+            const reminderInterval = setInterval(() => {
+                if (reminderCount < 3) {
+                    showArchitectMessage('🏗️ REMINDER: Click on the 2D maze view to modify walls!', true);
+                    reminderCount++;
+                } else {
+                    clearInterval(reminderInterval);
+                }
+            }, 10000); // Every 10 seconds, 3 times
+        }
+
+        function handleArchitectClick(event) {
+            if (playerRole !== 'architect') return;
+            
+            console.log('🏗️ Architect left click detected at:', event.clientX, event.clientY);
+            event.preventDefault();
+            const rect = guideCanvas.getBoundingClientRect();
+            const canvasX = event.clientX - rect.left;
+            const canvasY = event.clientY - rect.top;
+            
+            performArchitectAction(canvasX, canvasY, 'add');
+        }
+
+        function handleArchitectRightClick(event) {
+            if (playerRole !== 'architect') return;
+            
+            console.log('🏗️ Architect right click detected at:', event.clientX, event.clientY);
+            event.preventDefault();
+            event.stopPropagation();
+            const rect = guideCanvas.getBoundingClientRect();
+            const canvasX = event.clientX - rect.left;
+            const canvasY = event.clientY - rect.top;
+            
+            performArchitectAction(canvasX, canvasY, 'remove');
+            return false; // Extra prevention of context menu
+        }
+
+        function performArchitectAction(canvasX, canvasY, action) {
+            console.log('🏗️ performArchitectAction called:', {canvasX, canvasY, action, playerRole});
+            
+            const config = window.guideViewConfig;
+            if (!config || !maze) {
+                console.log('🏗️ Missing config or maze:', {config, maze});
+                return;
+            }
+            
+            const { cellSize, margin } = config;
+            console.log('🏗️ Config values:', {cellSize, margin});
+            
+            // Convert canvas coordinates to flipped grid coordinates (matching drawGuideView)
+            const canvasGridX = Math.floor((canvasX - margin) / cellSize);
+            const canvasGridZ = Math.floor((canvasY - margin) / cellSize);
+            
+            // Unflip the coordinates to get actual maze grid coordinates
+            // In drawGuideView: canvas_x = (maze.width - 1 - grid_x), so grid_x = maze.width - 1 - canvas_x
+            const gridX = maze.maze[0].length - 1 - canvasGridX;
+            const gridZ = maze.maze.length - 1 - canvasGridZ;
+            
+            // Convert grid coordinates to world coordinates
+            const worldX = gridX * maze.cellSize;
+            const worldZ = gridZ * maze.cellSize;
+            
+            console.log('🏗️ Coordinate conversion:', {
+                canvas: {canvasX, canvasY},
+                canvasGrid: {canvasGridX, canvasGridZ},
+                actualGrid: {gridX, gridZ},
+                world: {worldX, worldZ},
+                cellSize: maze.cellSize,
+                mazeSize: {width: maze.maze[0].length, height: maze.maze.length}
+            });
+            
+            // Bounds check on actual grid coordinates
+            if (gridX < 0 || gridX >= maze.maze[0].length || gridZ < 0 || gridZ >= maze.maze.length) {
+                console.log('🏗️ Click outside maze bounds');
+                return;
+            }
+            
+            // Check current maze state at this position
+            const currentValue = maze.maze[gridZ][gridX];
+            console.log(`🏗️ Current maze value at grid(${gridX}, ${gridZ}): ${currentValue} (${currentValue === 1 ? 'wall' : 'empty'})`);
+            
+            // Send wall change request to server
+            if (multiplayerManager && multiplayerManager.socket && multiplayerManager.socket.readyState === WebSocket.OPEN) {
+                const message = {
+                    type: 'architect_wall_change',
+                    x: worldX,
+                    z: worldZ,
+                    action: action
+                };
+                
+                console.log('🏗️ Sending message to server:', message);
+                multiplayerManager.socket.send(JSON.stringify(message));
+                
+                console.log(`🏗️ Sent ${action} wall request at world (${worldX}, ${worldZ}) grid (${gridX}, ${gridZ})`);
+            } else {
+                console.log('🏗️ Cannot send message - connection not ready:', {
+                    multiplayerManager: !!multiplayerManager,
+                    socket: !!multiplayerManager?.socket,
+                    readyState: multiplayerManager?.socket?.readyState
+                });
+            }
+        }
+
+        function showArchitectCooldown(seconds) {
+            console.log('🔥 showArchitectCooldown called with seconds:', seconds);
+            const cooldownIndicator = document.getElementById('architectCooldown');
+            if (cooldownIndicator) {
+                cooldownIndicator.textContent = `🔥 Cooldown: ${seconds}s`;
+                cooldownIndicator.style.display = 'block';
+                
+                const countdownTimer = setInterval(() => {
+                    seconds--;
+                    if (seconds <= 0) {
+                        cooldownIndicator.style.display = 'none';
+                        clearInterval(countdownTimer);
+                    } else {
+                        cooldownIndicator.textContent = `🔥 Cooldown: ${seconds}s`;
+                    }
+                }, 1000);
+            }
+        }
+
+        // In-game message display function
+        function showArchitectMessage(message, isSuccess = false) {
+            console.log('📢 Architect message:', message, 'isSuccess:', isSuccess);
+            
+            // Remove any existing messages
+            const existingMessages = document.querySelectorAll('.architect-message');
+            existingMessages.forEach(msg => msg.remove());
+            
+            // Create new message
+            const messageDiv = document.createElement('div');
+            messageDiv.className = 'architect-message';
+            
+            const backgroundColor = isSuccess ? 'rgba(76, 175, 80, 0.95)' : 'rgba(255, 69, 0, 0.95)';
+            const shadowColor = isSuccess ? 'rgba(76, 175, 80, 0.6)' : 'rgba(255, 69, 0, 0.6)';
+            
+            messageDiv.style.cssText = `
+                position: fixed;
+                top: 50%;
+                left: 50%;
+                transform: translate(-50%, -50%);
+                background: ${backgroundColor};
+                color: white;
+                padding: 15px 25px;
+                border-radius: 10px;
+                font-size: 16px;
+                font-weight: bold;
+                z-index: 10001;
+                text-align: center;
+                box-shadow: 0 4px 15px ${shadowColor};
+                border: 2px solid rgba(255, 255, 255, 0.3);
+                animation: fadeInOut 2s ease-in-out;
+            `;
+            
+            // Add fade animation if not already added
+            if (!document.getElementById('architect-message-style')) {
+                const style = document.createElement('style');
+                style.id = 'architect-message-style';
+                style.textContent = `
+                    @keyframes fadeInOut {
+                        0% { opacity: 0; transform: translate(-50%, -50%) scale(0.8); }
+                        20% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+                        80% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+                        100% { opacity: 0; transform: translate(-50%, -50%) scale(0.8); }
+                    }
+                `;
+                document.head.appendChild(style);
+            }
+            
+            const icon = isSuccess ? '✅' : '🚫';
+            messageDiv.innerHTML = `
+                <strong>${icon} Architect</strong><br>
+                ${message}
+            `;
+            document.body.appendChild(messageDiv);
+            
+            // Remove after 2 seconds
+            setTimeout(() => {
+                if (document.body.contains(messageDiv)) {
+                    document.body.removeChild(messageDiv);
+                }
+            }, 2000);
+        }
+        
+        // Backward compatibility function
+        function showArchitectError(message) {
+            showArchitectMessage(message, false);
+        }
+
+        // Expose functions globally so multiplayer.js can access them
+        console.log('🔥🔥🔥 ATTACHING FUNCTIONS TO WINDOW OBJECT! 🔥🔥🔥');
+        window.handleWallChanged = handleWallChanged;
+        window.showArchitectCooldown = showArchitectCooldown;
+        window.showArchitectError = showArchitectError;
+        window.showArchitectMessage = showArchitectMessage;
+        console.log('🔥🔥🔥 FUNCTIONS ATTACHED! handleWallChanged type:', typeof window.handleWallChanged, '🔥🔥🔥');
+        
+        // Add a simple test function to check if Three.js is working
+        window.testAddCube = function() {
+            console.log('🧪 Testing cube addition to scene...');
+            if (scene) {
+                const testCube = new THREE.Mesh(
+                    new THREE.BoxGeometry(5, 5, 5),
+                    new THREE.MeshBasicMaterial({ color: 0x00ffff })
+                );
+                testCube.position.set(0, 5, -10); // In front of player
+                scene.add(testCube);
+                console.log('🧪 Added cyan test cube to scene at (0, 5, -10)');
+            } else {
+                console.error('🧪 Scene not available for testing');
+            }
+        };
+        
+        // Add a debug function to check if the multiplayer system is working
+        window.forceCallHandleWallChanged = function() {
+            console.log('🔥 FORCING CALL TO handleWallChanged with test data...');
+            const testData = {
+                gridX: 5,
+                gridZ: 5,
+                action: 'add',
+                x: 5 * 3, // assuming cellSize is 3
+                z: 5 * 3
+            };
+            
+            console.log('🔥 Current game state:');
+            console.log('- window.handleWallChanged exists:', typeof window.handleWallChanged);
+            console.log('- handleWallChanged call count:', handleWallChangedCallCount);
+            console.log('- scene exists:', !!scene);
+            console.log('- camera exists:', !!camera);
+            console.log('- renderer exists:', !!renderer);
+            console.log('- mazeGroup exists:', !!mazeGroup);
+            console.log('- maze exists:', !!maze);
+            console.log('- playerRole:', playerRole);
+            console.log('- gameStarted:', gameStarted);
+            console.log('- multiplayerManager connected:', multiplayerManager?.connected);
+            
+            if (window.handleWallChanged) {
+                try {
+                    window.handleWallChanged(testData);
+                    console.log('🔥 handleWallChanged call completed successfully!');
+                } catch (error) {
+                    console.error('🔥 Error calling handleWallChanged:', error);
+                }
+            } else {
+                console.error('🔥 handleWallChanged not available!');
+            }
+        };
+        
+        // Quick test to see if basic scene manipulation works
+        window.quickSceneTest = function() {
+            console.log('🧪 Quick scene test...');
+            if (scene) {
+                const testCube = new THREE.Mesh(
+                    new THREE.BoxGeometry(2, 2, 2),
+                    new THREE.MeshBasicMaterial({ color: 0x00ff00 })
+                );
+                testCube.position.set(0, 2, -5);
+                scene.add(testCube);
+                console.log('🧪 Green test cube added to scene!');
+                return true;
+            } else {
+                console.error('🧪 No scene available!');
+                return false;
+            }
+        };
+        
+        // Check if functions are properly attached to window
+        window.checkWindowFunctions = function() {
+            console.log('🔍 Checking window functions...');
+            console.log('- window.handleWallChanged:', typeof window.handleWallChanged, window.handleWallChanged);
+            console.log('- window.testAddCube:', typeof window.testAddCube);
+            console.log('- window.forceCallHandleWallChanged:', typeof window.forceCallHandleWallChanged);
+            console.log('- window.quickSceneTest:', typeof window.quickSceneTest);
+            console.log('- window.debugArchitect:', typeof window.debugArchitect);
+            console.log('- multiplayerManager exists:', !!multiplayerManager);
+            console.log('- multiplayerManager connected:', multiplayerManager?.connected);
+            console.log('- multiplayerManager socket state:', multiplayerManager?.socket?.readyState);
+            console.log('- Current playerRole:', playerRole);
+            console.log('- gameStarted:', gameStarted);
+            
+            // Try to list all window functions related to our game
+            const gameFunctions = Object.keys(window).filter(key => 
+                key.includes('handle') || key.includes('test') || key.includes('debug') || key.includes('force')
+            );
+            console.log('- All game-related window functions:', gameFunctions);
+        };
+        
+        // Debug function for architect
+        window.debugArchitect = function() {
+            console.log('🏗️ ARCHITECT DEBUG INFO:');
+            console.log('- playerRole:', playerRole);
+            console.log('- guideCanvas exists:', !!guideCanvas);
+            console.log('- guideCanvas visible:', guideCanvas ? guideCanvas.style.display : 'N/A');
+            console.log('- guideViewConfig exists:', !!window.guideViewConfig);
+            console.log('- maze exists:', !!maze);
+            console.log('- multiplayerManager connected:', multiplayerManager?.connected);
+            console.log('- Socket state:', multiplayerManager?.socket?.readyState);
+            console.log('- scene exists:', !!scene);
+            console.log('- camera exists:', !!camera);
+            console.log('- renderer exists:', !!renderer);
+            console.log('- mazeGroup exists:', !!mazeGroup);
+            console.log('- mazeGroup children count:', mazeGroup?.children?.length);
+            console.log('- scene children count:', scene?.children?.length);
+            console.log('- renderer canvas in DOM:', !!(renderer?.domElement?.parentNode));
+            console.log('- camera position:', camera?.position);
+            console.log('- maze cellSize:', maze?.cellSize);
+            console.log('- architectWallMaterial exists:', !!architectWallMaterial);
+            
+            if (playerRole === 'architect') {
+                showArchitectMessage('DEBUG: Architect controls are active! Click on the 2D maze view.', true);
+                
+                // Highlight the guide canvas temporarily
+                if (guideCanvas) {
+                    const originalBorder = guideCanvas.style.border;
+                    guideCanvas.style.border = '5px solid #FF0000';
+                    guideCanvas.style.boxShadow = '0 0 20px #FF0000';
+                    
+                    setTimeout(() => {
+                        guideCanvas.style.border = originalBorder;
+                        guideCanvas.style.boxShadow = '';
+                    }, 3000);
+                }
+            } else {
+                console.log('🏗️ You are not the architect. Current role:', playerRole);
+            }
+        };
+        
+        // Test function for architect
+        window.testArchitectWall = function(x = 5, z = 5, action = 'add') {
+            if (playerRole !== 'architect') {
+                console.log('🏗️ You must be the architect to use this function');
+                return;
+            }
+            
+            console.log(`🏗️ Testing architect wall: ${action} at grid (${x}, ${z})`);
+            
+            if (!maze) {
+                console.log('🏗️ No maze data available');
+                return;
+            }
+            
+            const worldX = x * maze.cellSize;
+            const worldZ = z * maze.cellSize;
+            
+            if (multiplayerManager && multiplayerManager.socket && multiplayerManager.socket.readyState === WebSocket.OPEN) {
+                const message = {
+                    type: 'architect_wall_change',
+                    x: worldX,
+                    z: worldZ,
+                    action: action
+                };
+                
+                console.log('🏗️ Sending test message:', message);
+                multiplayerManager.socket.send(JSON.stringify(message));
+                showArchitectMessage(`Testing ${action} wall at (${x}, ${z})`, true);
+            } else {
+                console.log('🏗️ Connection not ready for testing');
+            }
+        };
+
+        function handleWallChanged(data) {
+            handleWallChangedCallCount++;
+            console.log('🔥🔥🔥 WALL CHANGE HANDLER CALLED! 🔥🔥🔥', data);
+            console.log('🔥🔥🔥 FUNCTION DEFINITELY EXECUTING! Call #' + handleWallChangedCallCount + ' 🔥🔥🔥');
+            
+            // Update the page title to show call count
+            document.title = `Maze Game - Wall Handler Called ${handleWallChangedCallCount} times`;
+            
+            // IMMEDIATELY add a test cube to see if the function is working at all
+            if (scene) {
+                const testCube = new THREE.Mesh(
+                    new THREE.BoxGeometry(3, 3, 3),
+                    new THREE.MeshBasicMaterial({ color: 0xff00ff })
+                );
+                testCube.position.set(Math.random() * 10 - 5, 3, Math.random() * 10 - 5);
+                scene.add(testCube);
+                console.log('🔥🔥🔥 ADDED TEST CUBE TO PROVE FUNCTION IS WORKING! 🔥🔥🔥');
+                
+                // Also show a visible message on screen
+                if (playerRole === 'architect') {
+                    showArchitectMessage('handleWallChanged called! Check for magenta cube!', true);
+                }
+            } else {
+                console.error('🔥🔥🔥 NO SCENE AVAILABLE IN handleWallChanged! 🔥🔥🔥');
+                
+                // Show error message on screen
+                if (playerRole === 'architect') {
+                    showArchitectMessage('ERROR: No scene available!', false);
+                }
+            }
+            
+            // Basic validation first
+            if (!data) {
+                console.error('🔥 No data provided to handleWallChanged');
+                return;
+            }
+            
+            console.log('🏗️ Current state - playerRole:', playerRole, 'maze exists:', !!maze, 'mazeGroup exists:', !!mazeGroup);
+            console.log('🏗️ Scene exists:', !!scene, 'Camera exists:', !!camera, 'Renderer exists:', !!renderer);
+            console.log('🏗️ Document title:', document.title, 'Window focus:', document.hasFocus());
+            console.log('🏗️ MazeGroup children count:', mazeGroup ? mazeGroup.children.length : 'N/A');
+            console.log('🏗️ architectWallMaterial exists:', !!architectWallMaterial);
+            
+            // Check if basic variables are defined
+            if (typeof playerRole === 'undefined') {
+                console.error('🔥 playerRole is undefined!');
+                return;
+            }
+            if (typeof maze === 'undefined') {
+                console.error('🔥 maze is undefined!');
+                return;
+            }
+            if (typeof mazeGroup === 'undefined') {
+                console.error('🔥 mazeGroup is undefined!');
+                return;
+            }
+            
+            // Update the local maze data manually since we're not sending the full maze
+            if (maze && maze.maze && data.gridX !== undefined && data.gridZ !== undefined) {
+                console.log('🏗️ Updating local maze data with individual change');
+                const oldValue = maze.maze[data.gridZ][data.gridX];
+                maze.maze[data.gridZ][data.gridX] = data.action === 'add' ? 1 : 0;
+                console.log(`🏗️ Updated maze[${data.gridZ}][${data.gridX}] from ${oldValue} to ${maze.maze[data.gridZ][data.gridX]}`);
+            } else {
+                console.log('🏗️ Cannot update wall - maze not available or invalid grid coords');
+                console.log('maze:', !!maze, 'maze.maze:', !!(maze && maze.maze), 'gridX:', data.gridX, 'gridZ:', data.gridZ);
+                return;
+            }
+            
+            // Show visual feedback to architect
+            if (playerRole === 'architect') {
+                showArchitectMessage(`Wall ${data.action === 'add' ? 'added' : 'removed'} successfully!`, true);
+            }
+            
+            // Update ALL views that need to reflect the maze changes
+            
+            // 1. Redraw the guide view if visible (for guide and architect)
+            if ((playerRole === 'guide' || playerRole === 'architect') && window.guideViewConfig && guideCanvas) {
+                console.log('🏗️ Redrawing guide view for', playerRole);
+                console.log('🏗️ Guide canvas dimensions:', guideCanvas.width, 'x', guideCanvas.height);
+                
+                // Force immediate redraw
+                setTimeout(() => {
+                    drawGuideView(maze, null, null);
+                    console.log('🏗️ Guide view redrawn');
+                }, 50); // Small delay to ensure maze data is updated
+            } else {
+                console.log('🏗️ Not redrawing guide view:', {
+                    playerRole,
+                    hasConfig: !!window.guideViewConfig,
+                    hasCanvas: !!guideCanvas
+                });
+            }
+            
+            // 2. For ALL players in 3D mode, update the visual walls
+            if (mazeGroup && scene) {
+                console.log('🏗️ Updating 3D wall visual');
+                
+                // Add a bright magenta test cube to verify coordinate system
+                const testCube = new THREE.Mesh(
+                    new THREE.BoxGeometry(2, 6, 2),
+                    new THREE.MeshBasicMaterial({ color: 0xff00ff })
+                );
+                testCube.position.set(data.gridX * maze.cellSize, 4, data.gridZ * maze.cellSize);
+                scene.add(testCube);
+                console.log('🏗️ Added MAGENTA test cube at calculated position:', testCube.position);
+                
+                updateWallVisual(data.gridX, data.gridZ, data.action);
+            } else {
+                console.log('🏗️ No mazeGroup or scene available for 3D update');
+                console.log('🏗️ mazeGroup:', !!mazeGroup, 'scene:', !!scene);
+            }
+            
+            // 3. Update any other views that might be affected (e.g., minimap, architect view)
+            if (playerRole === 'architect' && window.architectViewCanvas) {
+                console.log('🏗️ Updating architect view');
+                // Redraw architect view if it exists
+                setTimeout(() => {
+                    if (window.drawArchitectView) {
+                        drawArchitectView();
+                    }
+                }, 50);
+            }
+            
+            console.log(`🏗️ Wall ${data.action}ed at grid (${data.gridX}, ${data.gridZ}) - All views updated`);
+        }
+
+        function updateWallVisual(gridX, gridZ, action) {
+            console.log(`🔥🔥🔥 updateWallVisual CALLED: action=${action}, grid=(${gridX}, ${gridZ}) 🔥🔥🔥`);
+            
+            // Validate input parameters
+            if (typeof gridX === 'undefined' || typeof gridZ === 'undefined' || typeof action === 'undefined') {
+                console.error('🔥 Invalid parameters to updateWallVisual:', {gridX, gridZ, action});
+                return;
+            }
+            
+            if (!mazeGroup || !maze || !scene) {
+                console.error('🏗️ updateWallVisual: missing required objects', {
+                    mazeGroup: !!mazeGroup,
+                    maze: !!maze,
+                    scene: !!scene
+                });
+                return;
+            }
+            
+            const worldX = gridX * maze.cellSize;
+            const worldZ = gridZ * maze.cellSize;
+            
+            console.log(`🏗️ Wall action at grid(${gridX}, ${gridZ}) -> world(${worldX}, ${worldZ})`);
+            
+            // Update maze data
+            maze.maze[gridZ][gridX] = action === 'add' ? 1 : 0;
+            
+            if (action === 'add') {
+                console.log('🏗️ ADDING wall...');
+                
+                // Check if wall already exists at this position
+                const existingWall = mazeGroup.children.find(child => 
+                    child.userData && child.userData.gridX === gridX && child.userData.gridZ === gridZ
+                );
+                
+                if (existingWall) {
+                    console.log('🏗️ Wall already exists, skipping');
+                    return;
+                }
+                
+                // Create new wall - make it VERY visible for architect
+                const wallGeometry = new THREE.BoxGeometry(maze.cellSize, maze.wallHeight, maze.cellSize);
+                
+                // Create a bright, easily visible material for architect walls
+                const wallMaterial = new THREE.MeshBasicMaterial({
+                    color: 0xff6600, // Bright orange for architect walls
+                    transparent: false
+                });
+                
+                const wall = new THREE.Mesh(wallGeometry, wallMaterial);
+                wall.position.set(worldX, maze.wallHeight / 2, worldZ);
+                wall.userData = { gridX: gridX, gridZ: gridZ, architectPlaced: true };
+                wall.castShadow = true;
+                wall.receiveShadow = true;
+                
+                mazeGroup.add(wall);
+                console.log('🏗️ BRIGHT ORANGE WALL ADDED at position:', wall.position);
+                
+                // Add a glowing indicator above the wall for extra visibility
+                const glowGeometry = new THREE.SphereGeometry(0.5, 8, 8);
+                const glowMaterial = new THREE.MeshBasicMaterial({
+                    color: 0x00ff00,
+                    transparent: true,
+                    opacity: 0.7
+                });
+                const glow = new THREE.Mesh(glowGeometry, glowMaterial);
+                glow.position.set(worldX, maze.wallHeight + 2, worldZ);
+                glow.userData = { isGlow: true, parentWall: wall };
+                scene.add(glow);
+                console.log('🏗️ GLOWING GREEN SPHERE ADDED above wall');
+                
+            } else if (action === 'remove') {
+                console.log('🏗️ REMOVING wall...');
+                
+                // Find walls to remove (use fuzzy matching for better precision)
+                const wallsToRemove = mazeGroup.children.filter(child => {
+                    if (!child.userData) return false;
+                    
+                    // Check exact grid coordinates first
+                    if (child.userData.gridX === gridX && child.userData.gridZ === gridZ) {
+                        return true;
+                    }
+                    
+                    // Fallback: check if world position is close (within 0.5 units)
+                    const worldX = gridX * maze.cellSize;
+                    const worldZ = gridZ * maze.cellSize;
+                    const childX = child.position.x;
+                    const childZ = child.position.z;
+                    
+                    if (Math.abs(childX - worldX) < 0.5 && Math.abs(childZ - worldZ) < 0.5) {
+                        console.log('🏗️ Found wall by position matching:', childX, childZ, 'vs target:', worldX, worldZ);
+                        return true;
+                    }
+                    
+                    return false;
+                });
+                
+                if (wallsToRemove.length > 0) {
+                    wallsToRemove.forEach((wall, index) => {
+                        console.log(`🏗️ Removing wall ${index + 1}/${wallsToRemove.length} from scene`);
+                        mazeGroup.remove(wall);
+                        wall.geometry.dispose();
+                        wall.material.dispose();
+                        
+                        // Also remove any glow indicators
+                        const glowToRemove = scene.children.find(child =>
+                            child.userData && child.userData.isGlow && child.userData.parentWall === wall
+                        );
+                        if (glowToRemove) {
+                            scene.remove(glowToRemove);
+                            glowToRemove.geometry.dispose();
+                            glowToRemove.material.dispose();
+                            console.log('🏗️ Glow indicator REMOVED');
+                        }
+                    });
+                    console.log(`🏗️ Successfully removed ${wallsToRemove.length} wall(s)`);
+                } else {
+                    // List all available walls for debugging
+                    console.log('🏗️ No wall found to remove. Available walls:');
+                    mazeGroup.children.forEach((child, index) => {
+                        if (child.userData && (child.userData.gridX !== undefined)) {
+                            const distance = Math.abs(child.userData.gridX - gridX) + Math.abs(child.userData.gridZ - gridZ);
+                            console.log(`  ${index}: grid(${child.userData.gridX}, ${child.userData.gridZ}), distance: ${distance}, position: (${child.position.x}, ${child.position.z})`);
+                        }
+                    });
+                    
+                    // Check if there's a wall in the maze data but not in 3D scene
+                    if (maze.maze[gridZ] && maze.maze[gridZ][gridX] === 1) {
+                        console.log('🏗️ WARNING: Maze data shows wall exists but not found in 3D scene!');
+                    }
+                }
+            }
+            
+            console.log(`🏗️ Wall ${action} completed. MazeGroup children: ${mazeGroup.children.length}`);
+        }
+
+        function startGameTimer() {
+            // Create timer display
+            const timerDisplay = document.createElement('div');
+            timerDisplay.id = 'gameTimer';
+            timerDisplay.style.cssText = `
+                position: fixed;
+                top: 20px;
+                right: 20px;
+                background: rgba(0, 0, 0, 0.8);
+                color: white;
+                padding: 10px 20px;
+                border-radius: 10px;
+                font-size: 18px;
+                font-weight: bold;
+                z-index: 10000;
+                border: 2px solid #4CAF50;
+                box-shadow: 0 0 20px rgba(76, 175, 80, 0.3);
+            `;
+            document.body.appendChild(timerDisplay);
+            
+            let timeRemaining = gameTimeLimit;
+            
+            const updateTimer = () => {
+                const minutes = Math.floor(timeRemaining / 60000);
+                const seconds = Math.floor((timeRemaining % 60000) / 1000);
+                timerDisplay.textContent = `⏱️ ${minutes}:${seconds.toString().padStart(2, '0')}`;
+                
+                // Change color as time runs out
+                if (timeRemaining <= 60000) { // Last minute
+                    timerDisplay.style.borderColor = '#ff0000';
+                    timerDisplay.style.color = '#ff0000';
+                    timerDisplay.style.boxShadow = '0 0 20px rgba(255, 0, 0, 0.5)';
+                } else if (timeRemaining <= 120000) { // Last 2 minutes
+                    timerDisplay.style.borderColor = '#ff9800';
+                    timerDisplay.style.color = '#ff9800';
+                    timerDisplay.style.boxShadow = '0 0 20px rgba(255, 152, 0, 0.3)';
+                }
+                
+                timeRemaining -= 1000;
+                
+                if (timeRemaining <= 0) {
+                    clearInterval(gameTimer);
+                    handleTimeUp();
+                }
+            };
+            
+            updateTimer(); // Initial display
+            gameTimer = setInterval(updateTimer, 1000);
+        }
+
+        function stopGameTimer() {
+            if (gameTimer) {
+                clearInterval(gameTimer);
+                gameTimer = null;
+            }
+            
+            const timerDisplay = document.getElementById('gameTimer');
+            if (timerDisplay) {
+                timerDisplay.remove();
+            }
+        }
+
+        function handleTimeUp() {
+            if (!gameStarted) return;
+            gameStarted = false;
+            
+            // Stop the timer
+            stopGameTimer();
+            
+            // Create time up screen
+            const timeUpScreen = document.createElement('div');
+            timeUpScreen.style.cssText = `
+                position: fixed;
+                top: 50%;
+                left: 50%;
+                transform: translate(-50%, -50%);
+                background: rgba(255, 152, 0, 0.95);
+                color: white;
+                padding: 30px;
+                border-radius: 15px;
+                text-align: center;
+                font-size: 24px;
+                z-index: 10000;
+                box-shadow: 0 0 30px rgba(255, 152, 0, 0.7);
+            `;
+            
+            if (playerRole === 'architect') {
+                timeUpScreen.innerHTML = `
+                    <h2>⏰ Time's Up! Architect Wins! 🏗️</h2>
+                    <p>You successfully wasted enough time!</p>
+                `;
+            } else {
+                timeUpScreen.innerHTML = `
+                    <h2>⏰ Time's Up! 😔</h2>
+                    <p>The architect has won by running out the clock!</p>
+                `;
+            }
+            
+            document.body.appendChild(timeUpScreen);
+            
+            // Send game over message to server
+            if (multiplayerManager && multiplayerManager.connected) {
+                multiplayerManager.socket.send(JSON.stringify({
+                    type: 'game_over',
+                    winner: 'architect',
+                    roomCode: multiplayerManager.roomCode
+                }));
+            }
+            
+            // Clean up after a short delay
+            setTimeout(() => {
+                document.body.removeChild(timeUpScreen);
+                window.location.reload(); // Force page reload
+            }, 3000);
         }
 
         function animate() {
@@ -2251,7 +3177,7 @@
                         return;
                     }
 
-                    if (playerRole === 'guide') {
+                    if (playerRole === 'guide' || playerRole === 'architect') {
                         // Store position for this specific player ID
                         playerPositions[message.playerId] = {
                             x: message.position.x,
@@ -2260,13 +3186,71 @@
                             rotation: message.rotation
                         };
                         
-                        if (maze && guideCanvas && guideCtx) {
+                        // Guide: Update 2D view
+                        if (playerRole === 'guide' && maze && guideCanvas && guideCtx) {
                             requestAnimationFrame(() => {
                                 // Get the first (and should be only) player position
                                 const playerPos = Object.values(playerPositions)[0] || null;
                                 const monsterPos = Object.values(monsterPositions)[0] || null;
                                 drawGuideView(maze, playerPos, monsterPos);
                             });
+                        }
+                        
+                        // Architect: Update 3D view
+                        if (playerRole === 'architect') {
+                            console.log('Architect received player position:', message);
+                            if (otherPlayers[message.playerId]) {
+                                // Update existing player representation
+                                otherPlayers[message.playerId].visible = true;
+                                otherPlayers[message.playerId].position.set(
+                                    message.position.x,
+                                    message.position.y,
+                                    message.position.z
+                                );
+                                if (message.rotation) {
+                                    otherPlayers[message.playerId].rotation.set(
+                                        message.rotation.x,
+                                        message.rotation.y,
+                                        message.rotation.z
+                                    );
+                                }
+                            } else {
+                                // Create player representation for architect's 3D view
+                                console.log('Creating player representation for architect 3D view');
+                                const playerGeometry = new THREE.Group();
+                                
+                                const body = new THREE.Mesh(
+                                    new THREE.CylinderGeometry(0.4, 0.4, 2.5, 8),
+                                    new THREE.MeshPhongMaterial({ 
+                                        color: 0x00ff00,
+                                        emissive: 0x00ff00,
+                                        emissiveIntensity: 0.5
+                                    })
+                                );
+                                playerGeometry.add(body);
+                                
+                                const ring = new THREE.Mesh(
+                                    new THREE.TorusGeometry(0.5, 0.1, 8, 16),
+                                    new THREE.MeshPhongMaterial({
+                                        color: 0xffff00,
+                                        emissive: 0xffff00,
+                                        emissiveIntensity: 0.7
+                                    })
+                                );
+                                ring.position.y = 1.5;
+                                ring.rotation.x = Math.PI / 2;
+                                playerGeometry.add(ring);
+                                
+                                otherPlayers[message.playerId] = playerGeometry;
+                                otherPlayers[message.playerId].position.set(
+                                    message.position.x,
+                                    message.position.y,
+                                    message.position.z
+                                );
+                                otherPlayers[message.playerId].visible = true;
+                                scene.add(otherPlayers[message.playerId]);
+                                console.log('Added player representation to architect 3D scene');
+                            }
                         }
 
                         // Check if player reached the end
@@ -2350,7 +3334,7 @@
                     break;
 
                 case 'monster_position':
-                    if (playerRole === 'guide') {
+                    if (playerRole === 'guide' || playerRole === 'architect') {
                         if (!message.position || typeof message.position.x !== 'number' || typeof message.position.z !== 'number') {
                             console.error('Invalid monster position received:', message.position);
                             return;
@@ -2364,13 +3348,56 @@
                             rotation: message.rotation
                         };
                         
-                        if (maze && guideCanvas && guideCtx) {
+                        // Guide: Update 2D view
+                        if (playerRole === 'guide' && maze && guideCanvas && guideCtx) {
                             requestAnimationFrame(() => {
                                 // Get the first (and should be only) player and monster positions
                                 const playerPos = Object.values(playerPositions)[0] || null;
                                 const monsterPos = Object.values(monsterPositions)[0] || null;
                                 drawGuideView(maze, playerPos, monsterPos);
                             });
+                        }
+                        
+                        // Architect: Update 3D view
+                        if (playerRole === 'architect') {
+                            console.log('Architect received monster position:', message);
+                            if (otherPlayers[message.playerId]) {
+                                // Update existing monster representation
+                                otherPlayers[message.playerId].visible = true;
+                                otherPlayers[message.playerId].position.set(
+                                    message.position.x,
+                                    message.position.y,
+                                    message.position.z
+                                );
+                                if (message.rotation) {
+                                    otherPlayers[message.playerId].rotation.set(
+                                        message.rotation.x,
+                                        message.rotation.y,
+                                        message.rotation.z
+                                    );
+                                }
+                            } else {
+                                // Create monster representation for architect's 3D view
+                                console.log('Creating monster representation for architect 3D view');
+                                const monsterMesh = new THREE.Mesh(
+                                    new THREE.CylinderGeometry(0.3, 0.3, 2, 8),
+                                    new THREE.MeshPhongMaterial({ 
+                                        color: 0xff0000,
+                                        emissive: 0xff0000,
+                                        emissiveIntensity: 0.5
+                                    })
+                                );
+                                
+                                otherPlayers[message.playerId] = monsterMesh;
+                                otherPlayers[message.playerId].position.set(
+                                    message.position.x,
+                                    message.position.y,
+                                    message.position.z
+                                );
+                                otherPlayers[message.playerId].visible = true;
+                                scene.add(otherPlayers[message.playerId]);
+                                console.log('Added monster representation to architect 3D scene');
+                            }
                         }
                     } else if (playerRole === 'player') {
                         // Player sees monster position
@@ -2409,7 +3436,7 @@
                     // Initialize the maze for all roles
                     if (playerRole === 'player' || playerRole === 'monster') {
                         generateNewMaze();
-                    } else if (playerRole === 'guide') {
+                    } else if (playerRole === 'guide' || playerRole === 'architect') {
                         drawGuideView(maze);
                     }
                     break;
@@ -2500,9 +3527,17 @@
                             <h2>👻 Monster Wins! 👻</h2>
                             <p>The monster caught the player despite your guidance!</p>
                         `;
+                    } else if (playerRole === 'architect') {
+                        winScreen.innerHTML = isPlayerWin ? `
+                            <h2>🎉 Player Escaped! 😔</h2>
+                            <p>The player found the exit despite your efforts!</p>
+                        ` : `
+                            <h2>⏰ Time's Up! Architect Wins! 🏗️</h2>
+                            <p>You successfully wasted enough time!</p>
+                        `;
                     } else {
                         winScreen.innerHTML = isPlayerWin ? `
-                            <h2>🎉 Player and Guide Win! 🎉</h2>
+                            <h2>🎉 Player Wins! 🎉</h2>
                             <p>The player successfully reached the exit!</p>
                         ` : `
                             <h2>👻 Monster Wins! 👻</h2>
@@ -2642,6 +3677,9 @@
             if (!gameStarted) return;
             gameStarted = false;
 
+            // Stop the timer if running
+            stopGameTimer();
+
             // Disable controls immediately
             if (controls) {
                 controls.enabled = false;
@@ -2664,7 +3702,7 @@
                 box-shadow: 0 0 20px rgba(0, 255, 0, 0.5);
             `;
             winScreen.innerHTML = `
-                <h2>🎉 Player and Guide Win! 🎉</h2>
+                <h2>🎉 Player Wins! 🎉</h2>
                 <p>The player successfully reached the exit!</p>
             `;
             document.body.appendChild(winScreen);
@@ -2730,6 +3768,19 @@
                 document.body.removeChild(winScreen);
                 window.location.reload(); // Force page reload
             }, 1500);
+        }
+
+        function testBroadcast() {
+            console.log('🧪 Test broadcast button clicked');
+            if (multiplayerManager && multiplayerManager.connected) {
+                console.log('🧪 Sending test_broadcast message to server');
+                multiplayerManager.socket.send(JSON.stringify({
+                    type: 'test_broadcast'
+                }));
+            } else {
+                console.log('🧪 Not connected to multiplayer server');
+                alert('Not connected to multiplayer server');
+            }
         }
 
         function cleanupGame() {
@@ -2816,6 +3867,136 @@
             lastPositionUpdate = 0;
             lastPlayerPos = null;
             lastMonsterPos = null;
+        }
+
+        // 3D click handling for architect
+        function handleArchitect3DClick(event) {
+            if (playerRole !== 'architect') return;
+            
+            console.log('🏗️ Architect 3D left click detected');
+            
+            // Cast ray from camera to determine where in the maze the architect clicked
+            const raycaster = new THREE.Raycaster();
+            const mouse = new THREE.Vector2();
+            
+            // Calculate mouse position in normalized device coordinates
+            const rect = renderer.domElement.getBoundingClientRect();
+            mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+            mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+            
+            // Cast ray from camera
+            raycaster.setFromCamera(mouse, camera);
+            
+            // Create a ground plane at y=0 to intersect with
+            const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+            const intersectionPoint = new THREE.Vector3();
+            raycaster.ray.intersectPlane(groundPlane, intersectionPoint);
+            
+            if (intersectionPoint) {
+                // Convert world coordinates to grid coordinates
+                const gridX = Math.round(intersectionPoint.x / maze.cellSize);
+                const gridZ = Math.round(intersectionPoint.z / maze.cellSize);
+                
+                console.log('🏗️ Clicked at world:', intersectionPoint, 'grid:', gridX, gridZ);
+                
+                // Validate grid coordinates
+                if (gridX >= 0 && gridX < maze.maze[0].length && gridZ >= 0 && gridZ < maze.maze.length) {
+                    performArchitectAction3D(gridX, gridZ, 'add');
+                } else {
+                    console.log('🏗️ Click outside maze bounds');
+                }
+            }
+        }
+        
+        function handleArchitect3DRightClick(event) {
+            if (playerRole !== 'architect') return;
+            
+            console.log('🏗️ Architect 3D right click detected');
+            
+            // Cast ray from camera to determine where in the maze the architect clicked
+            const raycaster = new THREE.Raycaster();
+            const mouse = new THREE.Vector2();
+            
+            // Calculate mouse position in normalized device coordinates
+            const rect = renderer.domElement.getBoundingClientRect();
+            mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+            mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+            
+            // Cast ray from camera
+            raycaster.setFromCamera(mouse, camera);
+            
+            // Create a ground plane at y=0 to intersect with
+            const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+            const intersectionPoint = new THREE.Vector3();
+            raycaster.ray.intersectPlane(groundPlane, intersectionPoint);
+            
+            if (intersectionPoint) {
+                // Convert world coordinates to grid coordinates
+                const gridX = Math.round(intersectionPoint.x / maze.cellSize);
+                const gridZ = Math.round(intersectionPoint.z / maze.cellSize);
+                
+                console.log('🏗️ Right-clicked at world:', intersectionPoint, 'grid:', gridX, gridZ);
+                
+                // Validate grid coordinates
+                if (gridX >= 0 && gridX < maze.maze[0].length && gridZ >= 0 && gridZ < maze.maze.length) {
+                    performArchitectAction3D(gridX, gridZ, 'remove');
+                } else {
+                    console.log('🏗️ Right-click outside maze bounds');
+                }
+            }
+        }
+        
+        function performArchitectAction3D(gridX, gridZ, action) {
+            if (playerRole !== 'architect') {
+                console.log('🏗️ Not architect, ignoring action');
+                return;
+            }
+            
+            console.log(`🏗️ Performing 3D architect action: ${action} at grid (${gridX}, ${gridZ})`);
+            
+            // Check current state
+            const currentValue = maze.maze[gridZ][gridX];
+            console.log('🏗️ Current maze value at position:', currentValue);
+            
+            // Determine if action is valid
+            if (action === 'add' && currentValue === 1) {
+                console.log('🏗️ Wall already exists at this position');
+                showArchitectMessage('Wall already exists here!', false);
+                return;
+            }
+            
+            if (action === 'remove' && currentValue === 0) {
+                console.log('🏗️ No wall to remove at this position');
+                showArchitectMessage('No wall to remove here!', false);
+                return;
+            }
+            
+            // Calculate world coordinates
+            const worldX = gridX * maze.cellSize;
+            const worldZ = gridZ * maze.cellSize;
+            
+            console.log(`🏗️ Sending architect update: action=${action}, grid=(${gridX}, ${gridZ}), world=(${worldX}, ${worldZ})`);
+            
+            // Send the update to the server
+            if (multiplayerManager && multiplayerManager.connected) {
+                const updateData = {
+                    type: 'architect_update',
+                    action: action,
+                    gridX: gridX,
+                    gridZ: gridZ,
+                    x: worldX,
+                    z: worldZ
+                };
+                
+                multiplayerManager.socket.send(JSON.stringify(updateData));
+                console.log('🏗️ Architect update sent to server:', updateData);
+                
+                // Show feedback
+                showArchitectMessage(`Wall ${action === 'add' ? 'added' : 'removed'} at (${gridX}, ${gridZ})!`, true);
+            } else {
+                console.error('🏗️ Cannot send architect update - not connected to server');
+                showArchitectMessage('Not connected to server!', false);
+            }
         }
     </script>
 </body>
