@@ -623,7 +623,7 @@
                         description = 'Help the player reach the exit using your top-down 2D view. You can see the entire maze layout and all player positions.';
                         break;
                     case 'architect':
-                        description = 'You are the Architect! You have a top-down 2D view of the entire maze. Click on the maze to add/remove walls and create chaos! Your goal is to waste time so the player doesn\'t escape. But be careful - you have a 5-second cooldown between wall changes, and you can\'t completely block the path to the exit.';
+                        description = 'Architect: Click to add/remove walls.';
                         break;
                     case 'monster':
                         description = 'Hunt the player in first-person view! Use WASD to move and mouse to look around. Catch the player before they escape!';
@@ -1317,10 +1317,8 @@
 
             if (renderer && renderer.domElement) {
                 renderer.domElement.addEventListener('click', (event) => {
-                    // Handle architect wall placement in 3D view
-                    if (playerRole === 'architect') {
-                        handleArchitect3DClick(event);
-                    } else {
+                                    // Architect uses 2D view, so no 3D clicking
+                if (playerRole !== 'architect') {
                         // Only request pointer lock for player and monster, not architect
                         if (!isPointerLocked && (playerRole === 'player' || playerRole === 'monster')) {
                             renderer.domElement.requestPointerLock();
@@ -1328,12 +1326,10 @@
                     }
                 });
                 
-                // Handle right-click for wall removal
+                // Handle right-click for 3D view only (architect uses 2D)
                 renderer.domElement.addEventListener('contextmenu', (event) => {
-                    if (playerRole === 'architect') {
-                        event.preventDefault();
-                        handleArchitect3DRightClick(event);
-                        return false;
+                    if (playerRole !== 'architect') {
+                        // Only handle 3D right-click for non-architects
                     }
                 });
             }
@@ -1589,7 +1585,7 @@
                         description = 'Help the player reach the exit using your top-down 2D view. You can see the entire maze layout and all player positions.';
                         break;
                     case 'architect':
-                        description = 'You are the Architect! You have a top-down 2D view of the entire maze. Click on the maze to add/remove walls and create chaos! Your goal is to waste time so the player doesn\'t escape. But be careful - you have a 5-second cooldown between wall changes, and you can\'t completely block the path to the exit.';
+                        description = 'Architect: Click to add/remove walls.';
                         break;
                     case 'monster':
                         description = 'Hunt the player in first-person view! Use WASD to move and mouse to look around. Catch the player before they escape!';
@@ -2562,10 +2558,8 @@
                 return;
             }
             
-            // Show visual feedback to architect
-            if (playerRole === 'architect') {
-                showArchitectMessage(`Wall ${data.action === 'add' ? 'added' : 'removed'} successfully!`, true);
-            }
+            // Minimal feedback for architect
+            console.log(`🏗️ Wall ${data.action}ed at grid (${data.gridX}, ${data.gridZ})`);
             
             // Update ALL views that need to reflect the maze changes
             

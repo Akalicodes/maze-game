@@ -148,8 +148,26 @@ class MultiplayerManager {
             };
 
             this.socket.onmessage = (event) => {
+                console.log('🔥🔥🔥 WEBSOCKET MESSAGE RECEIVED! 🔥🔥🔥', event.data);
                 try {
+                    console.log('🚨 RAW WebSocket DATA RECEIVED by', this.role, ':', event.data);
                     const message = JSON.parse(event.data);
+                    console.log('🔥 PARSED MESSAGE by', this.role, ':', message.type, message);
+                    
+                    // Special check for architect messages
+                    if (message.type === 'architect_update') {
+                        console.log('🔥🔥🔥 ARCHITECT_UPDATE MESSAGE DETECTED! 🔥🔥🔥');
+                        console.log('🔥 Message data:', JSON.stringify(message, null, 2));
+                        console.log('🔥 About to call handleMessage...');
+                        console.log('🔥 this.role:', this.role);
+                        console.log('🔥 this object:', this);
+                    }
+                    
+                    // Special logging for architect messages
+                    if (message.type === 'architect_update' || message.type === 'wall_changed') {
+                        console.log('🏗️🏗️🏗️ ARCHITECT MESSAGE DETECTED!', message);
+                        console.log('🏗️ Message details:', JSON.stringify(message, null, 2));
+                    }
                     
                     // Reset connection attempts on successful message
                     if (this.gameState.reconnecting) {
@@ -161,6 +179,7 @@ class MultiplayerManager {
                     this.updateActivity();
                 } catch (error) {
                     console.error('Error processing message:', error);
+                    console.error('Raw event data was:', event.data);
                 }
             };
         } catch (error) {
@@ -199,6 +218,7 @@ class MultiplayerManager {
 
         console.log('Joining room:', roomCode);
         this.startSession();
+        this.roomCode = roomCode;
         
         this.socket.send(JSON.stringify({
             type: 'join_room',
@@ -208,7 +228,12 @@ class MultiplayerManager {
     }
 
     handleMessage(message) {
-        console.log('Handling message:', message);
+        console.log('🔥 [' + this.role + '] Handling message:', message.type, message);
+        
+        // Extra debugging for architect messages
+        if (message.type === 'architect_update') {
+            console.log('🔥🔥🔥 INSIDE handleMessage for architect_update! 🔥🔥🔥');
+        }
         
         switch (message.type) {
             case 'room_created':
@@ -296,6 +321,71 @@ class MultiplayerManager {
                 this.endSession();
                 if (this.onError) {
                     this.onError('Game session expired');
+                }
+                break;
+
+            case 'wall_changed':
+            case 'architect_update':  // Handle both old and new message types
+                console.log('🔥🔥🔥 REACHED ARCHITECT_UPDATE CASE STATEMENT! 🔥🔥🔥');
+                console.log('🏗️ ARCHITECT UPDATE received by', this.role, ':', message);
+                console.log('🏗️ Player role:', this.role, 'Connected:', this.connected, 'Active:', this.gameState.active);
+                
+                // Check if the function exists on window
+                console.log('🏗️ window.handleWallChanged exists:', typeof window.handleWallChanged);
+                console.log('🏗️ window object keys:', Object.keys(window).filter(k => k.includes('handle')));
+                
+                if (window.handleWallChanged) {
+                    console.log('🏗️ Calling handleWallChanged function for', this.role);
+                    try {
+                        window.handleWallChanged(message);
+                        console.log('🏗️ handleWallChanged completed successfully for', this.role);
+                    } catch (error) {
+                        console.error('🏗️ Error in handleWallChanged for', this.role, ':', error);
+                        console.error('🏗️ Error stack:', error.stack);
+                    }
+                } else {
+                    console.error('🏗️ handleWallChanged function not available for', this.role, '!');
+                    console.error('🏗️ Available window functions:', Object.keys(window).filter(k => typeof window[k] === 'function'));
+                }
+                break;
+
+            case 'architect_cooldown':
+                console.log('🔥 Architect on cooldown:', message.remainingSeconds);
+                if (window.showArchitectCooldown) {
+                    window.showArchitectCooldown(message.remainingSeconds);
+                }
+                break;
+
+            case 'architect_error':
+                console.log('🏗️ Architect error:', message.error);
+                if (window.showArchitectError) {
+                    window.showArchitectError(message.error);
+                } else {
+                    console.log('🏗️ Architect action blocked:', message.error);
+                }
+                // Don't call this.onError - no disconnection for architect errors
+                break;
+
+            case 'error':
+                console.log('❌ Server error:', message.error);
+                // Fallback check for any architect-related errors that might use the generic error type
+                if (message.error.includes('architect') || message.error.includes('wall') || 
+                    message.error.includes('cooldown') || message.error.includes('boundary') ||
+                    message.error.includes('player position') || message.error.includes('path') ||
+                    message.error.includes('already exists') || message.error.includes('remove') ||
+                    message.error.includes('bounds') || message.error.includes('modify') ||
+                    message.error.includes('maze data') || message.error.includes('Room not found')) {
+                    // Use the in-game error display function for architect-related errors
+                    console.log('🏗️ Architect-related error caught by fallback:', message.error);
+                    if (window.showArchitectError) {
+                        window.showArchitectError(message.error);
+                    } else {
+                        console.log('🏗️ Architect action blocked:', message.error);
+                    }
+                    // Don't call this.onError for architect-related errors - no disconnection
+                } else if (this.onError) {
+                    // Only disconnect for non-architect related errors
+                    this.onError(message.error);
                 }
                 break;
         }

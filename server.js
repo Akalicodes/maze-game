@@ -60,20 +60,21 @@ function getRoomStatus(room) {
     const playerCount = room.players.size;
     const roles = Array.from(room.roles.values());
     return {
-        isFull: playerCount >= 3,  // Only full when 3 or more players
-        isReady: playerCount === 3 && roles.includes('player') && roles.includes('guide') && roles.includes('monster'),
+        isFull: playerCount >= 4,  // Only full when 4 or more players
+        isReady: playerCount === 4 && roles.includes('player') && roles.includes('guide') && roles.includes('monster') && roles.includes('architect'),
         currentPlayers: playerCount,
         hasGuide: roles.includes('guide'),
+        hasArchitect: roles.includes('architect'),
         hasMonster: roles.includes('monster'),
         hasPlayer: roles.includes('player'),
         availableRoles: roles,
-        allPlayersJoined: playerCount === 3
+        allPlayersJoined: playerCount === 4
     };
 }
 
 // Function to randomly assign roles when all players have joined
 function assignRandomRoles(room) {
-    const allRoles = ['player', 'guide', 'monster'];
+    const allRoles = ['player', 'guide', 'monster', 'architect'];
     const playerIds = Array.from(room.players.keys());
     
     // Shuffle the roles array
@@ -178,11 +179,12 @@ function handleJoinRoom(ws, roomCode) {
         mazeSeed: room.mazeSeed
     }));
 
-    // If maze data exists, send it
+    // If maze data exists, send the most up-to-date version
     if (room.mazeData) {
+        console.log(`Sending updated maze data to joining player ${playerId}`);
         ws.send(JSON.stringify({
             type: 'maze_data',
-            maze: room.mazeData
+            maze: room.mazeData  // This includes any architect modifications
         }));
     }
 
@@ -197,7 +199,7 @@ function handleJoinRoom(ws, roomCode) {
         }
     });
 
-    // Check if all players have joined (3 players total)
+    // Check if all players have joined (4 players total)
     const newStatus = getRoomStatus(room);
     if (newStatus.allPlayersJoined) {
         console.log(`🎮 Room ${roomCode} - all players joined, assigning random roles...`);
@@ -232,7 +234,7 @@ function handleJoinRoom(ws, roomCode) {
         console.log(`🎮 Room ${roomCode} ready to start with random roles assigned`);
     } else {
         console.log('Waiting for more players');
-        const remainingPlayers = 3 - room.players.size;
+        const remainingPlayers = 4 - room.players.size;
         const message = `Waiting for ${remainingPlayers} more player${remainingPlayers > 1 ? 's' : ''}...`;
         room.players.forEach((playerWs) => {
             playerWs.send(JSON.stringify({
@@ -262,8 +264,8 @@ function handlePlayerMove(ws, data) {
     room.players.forEach((playerWs, playerId) => {
         const receiverRole = room.roles.get(playerId);
         
-        // Guide sees all positions
-        if (receiverRole === 'guide') {
+        // Guide and Architect see all positions
+        if (receiverRole === 'guide' || receiverRole === 'architect') {
             playerWs.send(JSON.stringify({
                 type: data.type,
                 position: data.position,
@@ -336,7 +338,7 @@ function handleDisconnect(ws) {
         // Send waiting message since we lost a player
         playerWs.send(JSON.stringify({
             type: 'waiting_for_players',
-            message: `A player left. Waiting for ${3 - status.currentPlayers} more player(s)...`,
+            message: `A player left. Waiting for ${4 - status.currentPlayers} more player(s)...`,
             currentPlayers: status.currentPlayers,
             canStart: false
         }));
@@ -384,14 +386,15 @@ function handleMazeData(ws, data) {
 
     // Store maze data in room and set as shared instance
     room.mazeData = data.maze;
-    room.sharedMazeInstance = data.maze;
+    room.sharedMazeInstance = room.mazeData;
 
     // Send maze data to ALL players, not just guide
     room.players.forEach((playerWs, playerId) => {
-        console.log(`Sending maze data to player ${playerId} with role ${room.roles.get(playerId)}`);
+        const playerRole = room.roles.get(playerId);
+        console.log(`Sending maze data to player ${playerId} with role ${playerRole}`);
         playerWs.send(JSON.stringify({
             type: 'maze_data',
-            maze: room.sharedMazeInstance
+            maze: room.mazeData  // Always send the current maze data state
         }));
     });
 }
@@ -404,6 +407,171 @@ function updateRoomActivity(roomCode, playerId) {
             room.playerActivity.set(playerId, Date.now());
         }
     }
+}
+
+// Pathfinding utility for validating maze paths
+function hasValidPath(maze, startPos, endPos, cellSize) {
+    const width = maze[0].length;
+    const height = maze.length;
+    
+    // Convert world positions to grid positions
+    const startX = Math.floor(startPos.x / cellSize);
+    const startZ = Math.floor(startPos.z / cellSize);
+    const endX = Math.floor(endPos.x / cellSize);
+    const endZ = Math.floor(endPos.z / cellSize);
+    
+    // Bounds check
+    if (startX < 0 || startX >= width || startZ < 0 || startZ >= height ||
+        endX < 0 || endX >= width || endZ < 0 || endZ >= height) {
+        return false;
+    }
+    
+    // Check if start or end positions are walls
+    if (maze[startZ][startX] === 1 || maze[endZ][endX] === 1) {
+        return false;
+    }
+    
+    // BFS pathfinding
+    const visited = Array(height).fill().map(() => Array(width).fill(false));
+    const queue = [{x: startX, z: startZ}];
+    visited[startZ][startX] = true;
+    
+    const directions = [[0, 1], [1, 0], [0, -1], [-1, 0]];
+    
+    while (queue.length > 0) {
+        const current = queue.shift();
+        
+        if (current.x === endX && current.z === endZ) {
+            return true;
+        }
+        
+        for (const [dx, dz] of directions) {
+            const newX = current.x + dx;
+            const newZ = current.z + dz;
+            
+            if (newX >= 0 && newX < width && newZ >= 0 && newZ < height &&
+                !visited[newZ][newX] && maze[newZ][newX] === 0) {
+                visited[newZ][newX] = true;
+                queue.push({x: newX, z: newZ});
+            }
+        }
+    }
+    
+    return false;
+}
+
+function handleArchitectWallChange(ws, data) {
+    const room = rooms.get(ws.roomCode);
+    if (!room || !room.mazeData) {
+        return;
+    }
+    
+    // Verify player is architect
+    if (room.roles.get(ws.playerId) !== 'architect') {
+        return;
+    }
+    
+    const { x, z, action } = data; // action: 'add' or 'remove'
+    const maze = room.mazeData.maze;
+    const cellSize = room.mazeData.cellSize;
+    
+    // Convert world coordinates to grid coordinates
+    const gridX = Math.floor(x / cellSize);
+    const gridZ = Math.floor(z / cellSize);
+    
+    // Basic bounds check only
+    if (gridX < 0 || gridX >= maze[0].length || gridZ < 0 || gridZ >= maze.length) {
+        return;
+    }
+    
+    // Apply the change directly
+    const newValue = action === 'add' ? 1 : 0;
+    maze[gridZ][gridX] = newValue;
+    
+    // Update the maze data - ensure both the room's maze data and shared instance are updated
+    room.mazeData.maze = maze;
+    room.sharedMazeInstance = room.mazeData; // Ensure shared instance is updated
+    
+    // Broadcast wall change to all players with the complete updated maze data
+    console.log(`🏗️ Broadcasting wall change to ${room.players.size} players:`);
+    room.players.forEach((playerWs, playerId) => {
+        const playerRole = room.roles.get(playerId);
+        console.log(`  - Sending to ${playerRole} (${playerId.slice(0, 8)})`);
+        
+        try {
+            const messageData = {
+                type: 'architect_update',
+                x: x,
+                z: z,
+                gridX: gridX,
+                gridZ: gridZ,
+                action: action
+            };
+            
+            const messageString = JSON.stringify(messageData);
+            console.log(`  🔥 Preparing message for ${playerRole}, size: ${messageString.length} chars`);
+            console.log(`  🔥 Full message content:`, messageString);
+            console.log(`  🔥 WebSocket readyState: ${playerWs.readyState} (1=OPEN)`);
+            
+            if (playerWs.readyState === 1) { // WebSocket.OPEN
+                playerWs.send(messageString);
+                console.log(`  ✅ Message sent to ${playerRole} (${playerId.slice(0, 8)})`);
+                
+                // Add a small delay to see if there are any async errors
+                setTimeout(() => {
+                    console.log(`  🔍 Post-send check for ${playerRole}: readyState=${playerWs.readyState}`);
+                }, 100);
+            } else {
+                console.error(`  ❌ WebSocket not open for ${playerRole}: readyState=${playerWs.readyState}`);
+            }
+        } catch (error) {
+            console.error(`  ❌ Failed to send to ${playerRole}:`, error);
+            console.error(`  ❌ Error details:`, error.message);
+            console.error(`  ❌ Stack trace:`, error.stack);
+        }
+    });
+    
+    console.log(`🏗️ Architect ${ws.playerId.slice(0, 8)} ${action}ed wall at (${gridX}, ${gridZ}) - Broadcasting to ${room.players.size} players`);
+}
+
+function handleTestBroadcast(ws, data) {
+    const room = rooms.get(ws.roomCode);
+    if (!room) {
+        console.log('❌ Test broadcast: Room not found');
+        return;
+    }
+    
+    console.log('🧪 TEST BROADCAST initiated by', ws.playerId.slice(0, 8));
+    
+    const testMessage = {
+        type: 'architect_update',
+        x: 100,
+        z: 100,
+        gridX: 10,
+        gridZ: 10,
+        action: 'add',
+        test: true
+    };
+    
+    console.log(`🧪 Broadcasting test message to ${room.players.size} players`);
+    room.players.forEach((playerWs, playerId) => {
+        const playerRole = room.roles.get(playerId);
+        console.log(`🧪 Sending test to ${playerRole} (${playerId.slice(0, 8)})`);
+        
+        try {
+            const messageString = JSON.stringify(testMessage);
+            console.log(`🧪 Test message: ${messageString}`);
+            
+            if (playerWs.readyState === 1) {
+                playerWs.send(messageString);
+                console.log(`🧪 ✅ Test sent to ${playerRole}`);
+            } else {
+                console.log(`🧪 ❌ WebSocket not open for ${playerRole}: ${playerWs.readyState}`);
+            }
+        } catch (error) {
+            console.error(`🧪 ❌ Test failed for ${playerRole}:`, error);
+        }
+    });
 }
 
 function handleMessage(ws, data) {
@@ -433,6 +601,13 @@ function handleMessage(ws, data) {
                 break;
             case 'maze_data':
                 handleMazeData(ws, data);
+                break;
+            case 'architect_wall_change':
+            case 'architect_update':  // Support both message types
+                handleArchitectWallChange(ws, data);
+                break;
+            case 'test_broadcast':
+                handleTestBroadcast(ws, data);
                 break;
             default:
                 console.log('Unknown message type:', data.type);
