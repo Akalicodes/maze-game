@@ -492,12 +492,8 @@ function handleArchitectWallChange(ws, data) {
     room.mazeData.maze = maze;
     room.sharedMazeInstance = room.mazeData; // Ensure shared instance is updated
     
-    // Broadcast wall change to all players with the complete updated maze data
-    console.log(`🏗️ Broadcasting wall change to ${room.players.size} players:`);
+    // Broadcast wall change to all players
     room.players.forEach((playerWs, playerId) => {
-        const playerRole = room.roles.get(playerId);
-        console.log(`  - Sending to ${playerRole} (${playerId.slice(0, 8)})`);
-        
         try {
             const messageData = {
                 type: 'architect_update',
@@ -509,29 +505,14 @@ function handleArchitectWallChange(ws, data) {
             };
             
             const messageString = JSON.stringify(messageData);
-            console.log(`  🔥 Preparing message for ${playerRole}, size: ${messageString.length} chars`);
-            console.log(`  🔥 Full message content:`, messageString);
-            console.log(`  🔥 WebSocket readyState: ${playerWs.readyState} (1=OPEN)`);
             
             if (playerWs.readyState === 1) { // WebSocket.OPEN
                 playerWs.send(messageString);
-                console.log(`  ✅ Message sent to ${playerRole} (${playerId.slice(0, 8)})`);
-                
-                // Add a small delay to see if there are any async errors
-                setTimeout(() => {
-                    console.log(`  🔍 Post-send check for ${playerRole}: readyState=${playerWs.readyState}`);
-                }, 100);
-            } else {
-                console.error(`  ❌ WebSocket not open for ${playerRole}: readyState=${playerWs.readyState}`);
             }
         } catch (error) {
-            console.error(`  ❌ Failed to send to ${playerRole}:`, error);
-            console.error(`  ❌ Error details:`, error.message);
-            console.error(`  ❌ Stack trace:`, error.stack);
+            console.error(`Failed to send message:`, error.message);
         }
     });
-    
-    console.log(`🏗️ Architect ${ws.playerId.slice(0, 8)} ${action}ed wall at (${gridX}, ${gridZ}) - Broadcasting to ${room.players.size} players`);
 }
 
 function handleTestBroadcast(ws, data) {
@@ -692,42 +673,115 @@ function handlePing(ws) {
 
 function handleGameOver(ws, data) {
     const room = rooms.get(ws.roomCode);
-    if (!room) return;
+    if (!room) {
+        console.log(`Game over called for non-existent room: ${ws.roomCode}`);
+        return;
+    }
 
-    console.log(`Game over in room ${ws.roomCode}, winner: ${data.winner}`);
+    console.log(`🎮 GAME OVER in room ${ws.roomCode}, winner: ${data.winner}`);
+    console.log(`🎮 Players in room: ${room.players.size}`);
 
-    // Notify all players in the room (including guide, player, and monster)
+    // Immediately mark game as ended to prevent further actions
+    room.gameStarted = false;
+    room.gameEnded = true;
+
+    // Create a list of all player IDs and their roles for logging
+    const playerList = Array.from(room.players.entries()).map(([playerId, playerWs]) => {
+        const role = room.roles.get(playerId);
+        return { playerId: playerId.slice(0, 8), role, connected: playerWs.readyState === 1 };
+    });
+    
+    console.log(`🎮 Ending game for players:`, playerList);
+
+    // Notify all players in the room of game termination
+    const terminationMessage = JSON.stringify({
+        type: 'game_terminated',
+        winner: data.winner,
+        message: `Game ended - ${data.winner} wins!`
+    });
+
+    const playersToDisconnect = [];
+    
     room.players.forEach((playerWs, playerId) => {
         const role = room.roles.get(playerId);
-        console.log(`Notifying ${role} (${playerId}) of game termination`);
+        console.log(`📨 Notifying ${role} (${playerId.slice(0, 8)}) of game termination`);
         
         try {
-            playerWs.send(JSON.stringify({
-                type: 'game_terminated',
-                winner: data.winner
-            }));
+            if (playerWs.readyState === 1) { // WebSocket.OPEN
+                playerWs.send(terminationMessage);
+                playersToDisconnect.push({ ws: playerWs, playerId, role });
+                console.log(`✅ Game termination message sent to ${role}`);
+            } else {
+                console.log(`⚠️ ${role} connection already closed (state: ${playerWs.readyState})`);
+            }
         } catch (error) {
-            console.error(`Error sending game over message to ${role}:`, error);
+            console.error(`❌ Error sending game over message to ${role}:`, error.message);
         }
     });
 
     // Wait a moment for messages to be sent, then force disconnect all players
     setTimeout(() => {
-        room.players.forEach((playerWs, playerId) => {
-            const role = room.roles.get(playerId);
-            console.log(`Force disconnecting ${role} (${playerId})`);
+        console.log(`🔌 Force disconnecting ${playersToDisconnect.length} players from room ${ws.roomCode}`);
+        
+        playersToDisconnect.forEach(({ ws: playerWs, playerId, role }) => {
+            console.log(`🔌 Force disconnecting ${role} (${playerId.slice(0, 8)})`);
             
             try {
-                playerWs.close();
+                if (playerWs.readyState === 1 || playerWs.readyState === 2) { // OPEN or CLOSING
+                    playerWs.terminate(); // Use terminate() for immediate disconnection
+                    console.log(`✅ ${role} disconnected successfully`);
+                } else {
+                    console.log(`⚠️ ${role} already disconnected (state: ${playerWs.readyState})`);
+                }
             } catch (error) {
-                console.error(`Error closing connection for ${role}:`, error);
+                console.error(`❌ Error disconnecting ${role}:`, error.message);
             }
         });
 
-        // Delete the room
+        // Clear all room data structures completely
+        room.players.clear();
+        room.playerPositions.clear();
+        room.roles.clear();
+        room.playerActivity.clear();
+        room.mazeData = null;
+        room.sharedMazeInstance = null;
+
+        // Delete the room from the global rooms map
         rooms.delete(ws.roomCode);
-        console.log(`Room ${ws.roomCode} terminated and deleted`);
-    }, 100); // Small delay to ensure messages are sent
+        
+        console.log(`🗑️ Room ${ws.roomCode} completely terminated and deleted`);
+        console.log(`📊 Active rooms remaining: ${rooms.size}`);
+        
+                 // Log remaining active rooms
+         if (rooms.size > 0) {
+             const remainingRooms = Array.from(rooms.keys());
+             console.log(`📊 Remaining room codes: [${remainingRooms.join(', ')}]`);
+         }
+     }, 200); // Slightly longer delay to ensure messages are delivered
+
+     // Failsafe: Force close any remaining connections after a longer delay
+     setTimeout(() => {
+         // Double-check that the room was actually deleted
+         if (rooms.has(ws.roomCode)) {
+             console.log(`⚠️ FAILSAFE: Room ${ws.roomCode} still exists, forcing cleanup`);
+             const room = rooms.get(ws.roomCode);
+             
+             // Force close any remaining connections
+             room.players.forEach((playerWs, playerId) => {
+                 const role = room.roles.get(playerId);
+                 console.log(`⚠️ FAILSAFE: Force terminating ${role} (${playerId.slice(0, 8)})`);
+                 try {
+                     playerWs.terminate();
+                 } catch (error) {
+                     console.error(`⚠️ FAILSAFE: Error terminating ${role}:`, error.message);
+                 }
+             });
+             
+             // Force delete the room
+             rooms.delete(ws.roomCode);
+             console.log(`⚠️ FAILSAFE: Room ${ws.roomCode} force deleted`);
+         }
+     }, 5000); // 5 second failsafe
 }
 
 // Handle new WebSocket connections

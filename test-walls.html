@@ -81,7 +81,7 @@
             
             architectWallMaterial = new THREE.MeshLambertMaterial({
                 map: wallTexture,
-                color: 0xffdddd
+                color: 0xff0000
             });
             
             // Add some reference objects
@@ -133,7 +133,7 @@
             
             // Create wall
             const wallGeometry = new THREE.BoxGeometry(maze.cellSize, maze.wallHeight, maze.cellSize);
-            const wallMaterial = new THREE.MeshLambertMaterial({ color: 0xffffff });
+            const wallMaterial = new THREE.MeshLambertMaterial({ color: 0xff0000 });
             const wall = new THREE.Mesh(wallGeometry, wallMaterial);
             
             wall.position.set(worldX, maze.wallHeight / 2, worldZ);
