@@ -16,6 +16,12 @@ class MazeGenerator {
         const startX = Math.floor(Math.random() * (this.width - 2)) + 1;
         this.startPosition = { x: startX * this.cellSize, z: 0 };
         
+        // ENSURE START IS CLEAR - create 2x2 open area
+        this.grid[0][startX] = 0;
+        this.grid[1][startX] = 0;
+        if (startX > 0) this.grid[0][startX - 1] = 0;
+        if (startX < this.width - 1) this.grid[0][startX + 1] = 0;
+        
         // Create the main path
         this.carve(startX, 0);
         
@@ -27,9 +33,11 @@ class MazeGenerator {
             endX = 1;
         }
         
-        // Ensure clear path near end
+        // ENSURE END IS CLEAR - create 2x2 open area
         this.grid[this.height - 1][endX] = 0;
         this.grid[this.height - 2][endX] = 0;
+        if (endX > 0) this.grid[this.height - 1][endX - 1] = 0;
+        if (endX < this.width - 1) this.grid[this.height - 1][endX + 1] = 0;
         
         // Set end position in world coordinates (multiply by cellSize)
         this.endPosition = { 
